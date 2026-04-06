@@ -1,0 +1,5 @@
+[tool.poetry]
+name = "api"
+version = "0.1.0"
+description = "SmartMeal API"
+authors = ["SmartMeal <admin@smartmeal.com>"]
