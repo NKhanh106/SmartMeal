@@ -16,7 +16,7 @@ class MealItemCreate(BaseModel):
 
     estimated_weight_g: Decimal = Field(..., gt=0)
 
-    source: ItemSourceType = ItemSourceType.nhap_thu_cong
+    source: Optional[ItemSourceType] = None
     confidence: Optional[Decimal] = Field(None, ge=0, le=1)
 
 

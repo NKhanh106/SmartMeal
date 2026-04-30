@@ -13,6 +13,7 @@ from app.models.user import User
 from app.schemas.food_nutrition import (
     FoodNutritionCreate,
     FoodNutritionResponse,
+    FoodNutritionResponseFull,
     FoodNutritionUpdate,
     NutritionEstimateRequest,
     NutritionEstimateResponse,
@@ -48,12 +49,15 @@ async def create_food_nutrition(
         )
 
     await db.refresh(food)
-    return food
+
+    # Luôn trả FoodNutritionResponseFull cho người tạo/admin
+    return FoodNutritionResponseFull.model_validate(food)
 
 
 @router.get("/", response_model=list[FoodNutritionResponse])
 async def list_food_nutrition(
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
@@ -70,6 +74,7 @@ async def list_food_nutrition(
 async def search_food_nutrition(
     keyword: str = Query(..., min_length=1),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
     limit: int = Query(default=20, ge=1, le=100),
 ):
     search_pattern = f"%{keyword.strip()}%"
@@ -88,12 +93,21 @@ async def search_food_nutrition(
     return list(result.scalars().all())
 
 
-@router.get("/{food_id}", response_model=FoodNutritionResponse)
+async def _food_to_response(food: FoodNutrition, current_user: User) -> FoodNutritionResponse | FoodNutritionResponseFull:
+    """Trả full response cho owner hoặc admin, basic response cho người khác."""
+    if current_user.role == "admin" or food.created_by_user_id == current_user.id:
+        return FoodNutritionResponseFull.model_validate(food)
+    return FoodNutritionResponse.model_validate(food)
+
+
+@router.get("/{food_id}", response_model=FoodNutritionResponse | FoodNutritionResponseFull)
 async def get_food_nutrition(
     food_id: UUID,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    return await _get_food_or_404(db, food_id)
+    food = await _get_food_or_404(db, food_id)
+    return _food_to_response(food, current_user)
 
 
 @router.put("/{food_id}", response_model=FoodNutritionResponse)
@@ -137,6 +151,7 @@ async def delete_food_nutrition(
 async def estimate_food_nutrition(
     payload: NutritionEstimateRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     food = await _get_food_or_404(db, payload.food_id)
     calculated_result = calculate_nutrition_by_weight(

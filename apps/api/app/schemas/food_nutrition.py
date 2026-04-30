@@ -30,7 +30,7 @@ class FoodNutritionBase(BaseModel):
     external_id: Optional[str] = Field(None, max_length=255)
 
     is_verified: bool = False
-    created_by_user_id: Optional[UUID] = None
+
 
 class FoodNutritionCreate(FoodNutritionBase):
     pass
@@ -61,6 +61,16 @@ class FoodNutritionUpdate(BaseModel):
 
 class FoodNutritionResponse(FoodNutritionBase):
     id: UUID
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# Full response — chỉ trả cho người tạo hoặc admin
+class FoodNutritionResponseFull(FoodNutritionBase):
+    id: UUID
+    created_by_user_id: Optional[UUID] = None
     created_at: datetime
     updated_at: datetime
 

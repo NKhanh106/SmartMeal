@@ -28,6 +28,7 @@ class NutritionGoalCreate(BaseModel):
     target_weight_kg: Optional[float] = None
     start_date: Optional[date] = None
     end_date: Optional[date] = None
+    note: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_date_range(self) -> "NutritionGoalCreate":

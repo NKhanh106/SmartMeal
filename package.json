@@ -1,0 +1,22 @@
+{
+  "name": "smartmeal",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "dev:web": "pnpm --filter web dev",
+    "dev:api": "cd apps/api && uvicorn app.main:app --reload",
+    "install:all": "pnpm install",
+    "migrate": "cd apps/api && alembic upgrade head",
+    "test": "cd apps/api && pytest"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0"
+  },
+  "packageManager": "pnpm@9.0.0",
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  }
+}

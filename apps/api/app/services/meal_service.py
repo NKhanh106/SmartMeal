@@ -1,11 +1,13 @@
 import uuid
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
+from typing import Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.enums import ItemSourceType
 from app.models.food_nutrition import FoodNutrition
 from app.models.meal import MealItem, MealLog
 from app.models.nutrition_goal import NutritionGoal
@@ -16,7 +18,14 @@ def round_decimal(value: Decimal, places: str = "0.01") -> Decimal:
     return value.quantize(Decimal(places), rounding=ROUND_HALF_UP)
 
 
-def calculate_item_nutrition(food: FoodNutrition, weight_g: Decimal) -> dict:
+def calculate_item_nutrition(food: Optional[FoodNutrition], weight_g: Decimal) -> dict:
+    if food is None:
+        return {
+            "calories": round_decimal(Decimal("0")),
+            "protein_g": round_decimal(Decimal("0")),
+            "carb_g": round_decimal(Decimal("0")),
+            "fat_g": round_decimal(Decimal("0")),
+        }
     ratio = weight_g / Decimal("100")
     calories = Decimal(str(food.calories_per_100g)) * ratio
     protein_g = Decimal(str(food.protein_per_100g)) * ratio
@@ -74,39 +83,35 @@ async def create_meal_log_with_items(
     total_fat = Decimal("0")
 
     for item_payload in payload.items:
-        if item_payload.food_nutrition_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="food_nutrition_id is required for MVP meal logging.",
-            )
+        food = None
+        food_id = item_payload.food_nutrition_id
+        detected_name = item_payload.detected_food_name
 
-        result = await db.execute(
-            select(FoodNutrition).where(FoodNutrition.id == item_payload.food_nutrition_id)
-        )
-        food = result.scalar_one_or_none()
-        if not food:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Food nutrition not found: {item_payload.food_nutrition_id}",
+        if food_id is not None:
+            result = await db.execute(
+                select(FoodNutrition).where(FoodNutrition.id == food_id)
             )
+            food = result.scalar_one_or_none()
+            if food is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Food nutrition not found: {food_id}",
+                )
 
-        nutrition = calculate_item_nutrition(
-            food=food,
-            weight_g=item_payload.estimated_weight_g,
-        )
+        nutrition = calculate_item_nutrition(food, item_payload.estimated_weight_g)
 
         meal_item = MealItem(
             meal_log_id=meal_log.id,
-            food_nutrition_id=food.id,
-            detected_food_name=item_payload.detected_food_name or food.food_name,
-            display_food_name=item_payload.display_food_name or food.food_name,
+            food_nutrition_id=food.id if food else None,
+            detected_food_name=detected_name or (food.food_name if food else "Unknown"),
+            display_food_name=item_payload.display_food_name or (food.food_name if food else detected_name),
             estimated_weight_g=float(item_payload.estimated_weight_g),
             calories=float(nutrition["calories"]),
             protein_g=float(nutrition["protein_g"]),
             carb_g=float(nutrition["carb_g"]),
             fat_g=float(nutrition["fat_g"]),
             confidence=float(item_payload.confidence) if item_payload.confidence is not None else None,
-            source=item_payload.source,
+            source=item_payload.source or ItemSourceType.ai_nhan_dien,
         )
 
         db.add(meal_item)

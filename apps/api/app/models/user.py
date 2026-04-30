@@ -47,6 +47,8 @@ class User(Base):
 
     # Relationship (1-1 với user_profiles)
     profile = relationship("UserProfile", back_populates="user", uselist=False, cascade="all, delete")
+    progress_logs = relationship("ProgressLog", back_populates="user", cascade="all, delete")
+    workout_plans = relationship("WorkoutPlan", back_populates="user", cascade="all, delete")
 
     __table_args__ = (
         CheckConstraint("role IN ('user', 'admin')", name="chk_users_role"),

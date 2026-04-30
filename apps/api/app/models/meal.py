@@ -109,7 +109,7 @@ class MealItem(Base):
     source: Mapped[ItemSourceType] = mapped_column(
         Enum(ItemSourceType, name="item_source_type", create_type=False),
         nullable=False,
-        default=ItemSourceType.nhap_thu_cong,
+        default=ItemSourceType.ai_nhan_dien,
     )
 
     ai_raw_result: Mapped[Optional[dict]] = mapped_column(JSONB)

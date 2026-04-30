@@ -20,20 +20,6 @@ from app.services.daily_recommendation_service import (
 router = APIRouter(prefix="/ai/daily-planner", tags=["AI Daily Planner"])
 
 
-@router.post("/generate", response_model=GenerateDailyPlannerResponse)
-async def generate_my_daily_planner(
-    target_date: Optional[date] = Query(default=None),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    recommendation = await generate_daily_recommendation(
-        db=db,
-        user_id=current_user.id,
-        target_date=target_date,
-    )
-    return {"recommendation": recommendation}
-
-
 @router.post("/generate/{user_id}", response_model=GenerateDailyPlannerResponse)
 async def generate_daily_planner_for_user(
     user_id: UUID,
@@ -45,6 +31,20 @@ async def generate_daily_planner_for_user(
     recommendation = await generate_daily_recommendation(
         db=db,
         user_id=user_id,
+        target_date=target_date,
+    )
+    return {"recommendation": recommendation}
+
+
+@router.post("/generate", response_model=GenerateDailyPlannerResponse)
+async def generate_my_daily_planner(
+    target_date: Optional[date] = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    recommendation = await generate_daily_recommendation(
+        db=db,
+        user_id=current_user.id,
         target_date=target_date,
     )
     return {"recommendation": recommendation}

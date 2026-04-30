@@ -151,10 +151,10 @@ async def get_daily_dashboard(
     )
     meals = result.scalars().all()
 
-    total_calories = sum(safe_decimal(meal.total_calories) for meal in meals)
-    total_protein = sum(safe_decimal(meal.total_protein_g) for meal in meals)
-    total_carb = sum(safe_decimal(meal.total_carb_g) for meal in meals)
-    total_fat = sum(safe_decimal(meal.total_fat_g) for meal in meals)
+    total_calories = sum((safe_decimal(meal.total_calories) for meal in meals), Decimal("0"))
+    total_protein = sum((safe_decimal(meal.total_protein_g) for meal in meals), Decimal("0"))
+    total_carb = sum((safe_decimal(meal.total_carb_g) for meal in meals), Decimal("0"))
+    total_fat = sum((safe_decimal(meal.total_fat_g) for meal in meals), Decimal("0"))
 
     total_calories = round_decimal(total_calories)
     total_protein = round_decimal(total_protein)

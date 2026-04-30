@@ -5,8 +5,11 @@ from app.models.daily_recommendation import DailyRecommendation
 from app.models.food_nutrition import FoodNutrition
 from app.models.meal import MealItem, MealLog
 from app.models.nutrition_goal import NutritionGoal
+from app.models.progress_log import ProgressLog
 from app.models.user import User
 from app.models.user_profile import UserProfile
+from app.models.workout_item import WorkoutItem
+from app.models.workout_plan import WorkoutPlan
 
 __all__ = [
     "AILog",
@@ -18,6 +21,9 @@ __all__ = [
     "MealItem",
     "MealLog",
     "NutritionGoal",
+    "ProgressLog",
     "User",
     "UserProfile",
+    "WorkoutItem",
+    "WorkoutPlan",
 ]

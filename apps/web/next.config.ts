@@ -1,4 +1,7 @@
-import type { NextConfig } from 'next';
+import type { NextConfig } from "next";
 
-const nextConfig: NextConfig = {};
+const nextConfig: NextConfig = {
+  // Disable Turbopack for stability on Windows
+};
+
 export default nextConfig;
