@@ -18,6 +18,10 @@ from app.chatbot.utils import build_chat_title
 from app.core.config import settings
 from app.models.chat import ChatMessage, ChatSession
 from app.services.ai_log_service import create_ai_log
+from app.services.conversation_insights_service import (
+    extract_insights_from_conversation,
+    upsert_conversation_insights,
+)
 
 
 async def create_chat_session(
@@ -169,6 +173,39 @@ async def send_chat_message(
             ai_analysis_log_id=ai_log.id,
         )
         session.last_message_at = datetime.now(timezone.utc)
+
+        # ── Extract & save conversation insights ─────────────────────────────
+        # Lay 6 tin nhan gan nhat (user + assistant) de trich xuat insights
+        recent_for_insight = [
+            {"role": "user", "content": user_content},
+            {"role": "assistant", "content": answer},
+        ]
+        # Lay them tin nhan cu trong cung session de co context day du hon
+        more_msgs_result = await db.execute(
+            select(ChatMessage)
+            .where(ChatMessage.session_id == session_id)
+            .order_by(ChatMessage.created_at.desc())
+            .limit(4)
+        )
+        more_msgs = list(reversed(more_msgs_result.scalars().all()))
+        for msg in more_msgs:
+            recent_for_insight.insert(0, {"role": msg.role, "content": msg.content})
+
+        insights_result = await extract_insights_from_conversation(
+            db=db,
+            user_id=user_id,
+            session_id=session_id,
+            recent_messages=recent_for_insight,
+        )
+
+        if insights_result.insights:
+            await upsert_conversation_insights(
+                db=db,
+                user_id=user_id,
+                session_id=session_id,
+                insights=insights_result.insights,
+            )
+        # ── End insight extraction ─────────────────────────────────────────
 
         await db.commit()
         await db.refresh(user_message)

@@ -27,9 +27,21 @@ class MealUpdatePreviewItem(BaseModel):
     detected_food_name: str = Field(..., description="Tên món ăn được phát hiện từ ảnh")
     matched_food_id: Optional[UUID] = Field(None, description="UUID trong food_nutrition nếu match thành công")
     match_status: MatchStatus = Field(..., description="Trạng thái khớp: matched / partial / not_found")
+    match_score: Optional[float] = Field(
+        None, ge=0.0, le=1.0,
+        description="Điểm fuzzy match (0-1): 1.0=hoàn toàn khớp, 0.55+=tốt, 0.4-0.54=khớp một phần"
+    )
+    match_method: Optional[str] = Field(
+        None,
+        description="Phương pháp match: 'exact' | 'normalized' | 'fuzzy' | 'learned'"
+    )
+    alternatives: Optional[list[dict]] = Field(
+        None,
+        description="Danh sách gợi ý thay thế: [{food_id, food_name, score}]"
+    )
     estimated_weight_g: float = Field(..., ge=1, description="Cân nặng ước lượng (gram)")
 
-    confidence: float = Field(..., ge=0.0, le=1.0, description="Độ chắc chắn từ AI")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Độ chắc chắn từ AI vision")
     calories: Optional[float] = Field(None, ge=0, description="Calories tính theo khối lượng")
     protein_g: Optional[float] = Field(None, ge=0, description="Protein (gram) tính theo khối lượng")
     carb_g: Optional[float] = Field(None, ge=0, description="Carb (gram) tính theo khối lượng")
@@ -45,6 +57,15 @@ class MealUpdatePreviewResponse(BaseModel):
     total_fat_g: float = Field(..., ge=0)
     meal_type: str
     ai_model: Optional[str] = None
+    # Image metadata — set when image is persisted during preview
+    uploaded_image_id: Optional[UUID] = Field(
+        None,
+        description="ID of the uploaded image. Use this in the confirm request to link the image to the meal.",
+    )
+    image_url: Optional[str] = Field(
+        None,
+        description="Public URL to the uploaded preview image.",
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -62,6 +83,11 @@ class MealUpdateConfirmItem(BaseModel):
 class MealUpdateConfirmRequest(BaseModel):
     meal_type: str = Field(..., description="bua_sang | bua_trua | bua_toi | an_vat | khac")
     meal_time: Optional[datetime] = Field(None)
+    uploaded_image_id: Optional[UUID] = Field(
+        None,
+        description="ID of the image previously uploaded during preview. "
+        "If provided, the image will be linked to this meal log.",
+    )
     items: list[MealUpdateConfirmItem] = Field(..., min_length=1)
 
 

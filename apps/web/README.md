@@ -1,239 +1,202 @@
-# 💻 SmartMeal Frontend — Next.js 15
+# SmartMeal Web - Frontend Application
 
-## Tổng quan
+## Mục đích
 
-Frontend của SmartMeal được viết bằng **Next.js 15** (App Router) với **TypeScript**. Giao diện sử dụng **Tailwind CSS v4** và **shadcn/ui** (Radix UI primitives), quản lý server state bằng **TanStack Query**.
+Đây là **frontend chính** của ứng dụng SmartMeal - một web app hiện đại cho phép người dùng quản lý dinh dưỡng, theo dõi bữa ăn, lập kế hoạch tập luyện, và tương tác với chatbot AI.
 
-> **Trạng thái**: Hiện tại đang ở giai đoạn **scaffold** — backend connection test page đã hoạt động, UI components cơ bản đã setup. Các trang tính năng (dashboard, meal-log, chat...) cần phát triển thêm.
+## Công nghệ sử dụng
 
----
+- **Framework**: Next.js 15 (App Router) - React framework với Server Components
+- **UI Library**: Tailwind CSS v4 + shadcn/ui - Thiết kế đẹp, responsive
+- **State Management**: TanStack Query (React Query) - Quản lý server state
+- **HTTP Client**: Axios - Gọi API backend
+- **Charts**: Recharts - Biểu đồ và visualizations
+- **Forms**: React Hook Form + Zod - Form handling & validation
+- **Animations**: Framer Motion - Smooth animations
+- **Icons**: Lucide React - Bộ icon đẹp
+- **Language**: TypeScript - Type safety
 
 ## Cấu trúc thư mục
 
 ```
-apps/web/src/
-├── app/                       # App Router — file-based routing
-│   ├── layout.tsx             # Root layout: QueryProvider, Toaster, html lang="vi"
-│   ├── page.tsx              # Backend connection test page (/)
-│   ├── globals.css           # Tailwind v4 @theme definitions
-│   │
-│   ├── dashboard/            # [TODO] Trang tổng quan: biểu đồ calo/macro tuần
-│   ├── meal-log/             # [TODO] Ghi nhận bữa ăn, chụp ảnh món ăn
-│   ├── chat/                 # [TODO] Giao diện AI Coach Chatbot
-│   ├── profile/              # [TODO] Hồ sơ người dùng
-│   ├── goals/                # [TODO] Thiết lập mục tiêu dinh dưỡng
-│   ├── workout/              # [TODO] Kế hoạch tập luyện
-│   └── auth/                 # [TODO] Login / Register pages
-│
-├── components/               # React components
-│   └── ui/                   # shadcn/ui components (14 components hiện tại)
-│       ├── avatar.tsx
-│       ├── badge.tsx
-│       ├── button.tsx
-│       ├── card.tsx
-│       ├── dialog.tsx
-│       ├── dropdown-menu.tsx
-│       ├── input.tsx
-│       ├── label.tsx
-│       ├── progress.tsx
-│       ├── separator.tsx
-│       ├── skeleton.tsx
-│       ├── tabs.tsx
-│       ├── toast.tsx
-│       └── toaster.tsx
-│
-├── hooks/                    # Custom React Hooks
-│   └── use-toast.ts          # Hook cho toast notifications
-│
-├── lib/                      # Core utilities & configurations
-│   ├── utils.ts              # cn() — clsx + tailwind-merge helper
-│   └── api-client.ts         # Axios instance với JWT interceptors
-│
-├── providers/                 # Context providers (client components)
-│   └── query-provider.tsx    # TanStack Query provider
-│
-├── services/                 # API service functions (gọi backend)
-│   └── health-service.ts     # getHealth() — test backend connectivity
-│
-└── features/                 # [TODO] Feature-sliced modules (complex domain logic)
-    ├── auth/                 # Auth forms, login/register UI
-    ├── dashboard/            # Dashboard components & hooks
-    ├── meal-log/             # Meal logging components
-    ├── chatbot/              # Chatbot UI (MessageBubble, ChatInput...)
-    └── nutrition/            # Nutrition charts, goal forms
+apps/web/
+├── src/
+│   ├── app/                 # Next.js App Router (pages)
+│   │   ├── (auth)/         # Authentication routes (login, register)
+│   │   ├── (dashboard)/    # Protected dashboard routes
+│   │   ├── layout.tsx      # Root layout
+│   │   └── page.tsx        # Landing page
+│   ├── components/         # React components
+│   │   ├── chatbot/        # AI chatbot UI
+│   │   ├── layout/         # Layout components
+│   │   └── ui/             # shadcn/ui components
+│   ├── contexts/           # React contexts
+│   ├── hooks/              # Custom hooks
+│   ├── lib/                # Utilities
+│   ├── providers/          # App providers
+│   ├── services/           # API services
+│   └── data/               # Mock data
+├── middleware.ts           # Next.js middleware (auth)
+├── next.config.ts          # Next.js config
+├── tailwind.config.ts      # Tailwind CSS config
+└── package.json
 ```
 
----
+## Các trang chính
 
-## Công nghệ & Thư viện
+### Public Pages
+| Route | Mô tả |
+|-------|-------|
+| `/` | Landing page - giới thiệu ứng dụng |
+| `/login` | Trang đăng nhập |
+| `/register` | Trang đăng ký |
 
-| Thư viện | Phiên bản | Mục đích |
-|----------|-----------|-----------|
-| **Next.js** | 15.2.4 | Framework, App Router, SSR/SSG |
-| **React** | 19.0.0 | UI library |
-| **TypeScript** | 5.8 | Type safety |
-| **Tailwind CSS** | 4.1.4 | Utility-first CSS (v4, dùng `@theme` trong CSS) |
-| **shadcn/ui** | — | Radix UI + Tailwind components |
-| **TanStack Query** | 5.72.2 | Server state management, caching |
-| **Axios** | 1.8.4 | HTTP client cho API calls |
-| **React Hook Form** | 7.55 | Form state management |
-| **Zod** | 3.24.2 | Runtime schema validation |
-| **Framer Motion** | 12.6.3 | Animations & transitions |
-| **Recharts** | 2.15.2 | Charts (biểu đồ calo, macros) |
-| **Lucide React** | 0.487 | Icons |
+### Dashboard (Protected Routes)
+| Route | Mô tả |
+|-------|-------|
+| `/dashboard` | Trang chủ dashboard - tổng quan |
+| `/upload` | Upload ảnh thực phẩm |
+| `/history` | Lịch sử bữa ăn |
+| `/goals` | Thiết lập mục tiêu dinh dưỡng |
+| `/workout` | Quản lý kế hoạch tập luyện |
+| `/analytics` | Biểu đồ phân tích |
+| `/profile` | Thông tin cá nhân |
+| `/recommendations` | Đề xuất từ AI |
 
----
+## Components
+
+### Layout Components
+- `Header.tsx` - Thanh header với navigation
+- `Sidebar.tsx` - Sidebar menu
+- `DashboardLayout.tsx` - Layout wrapper cho dashboard
+
+### Chatbot Components
+- `FloatingChatBot.tsx` - Nút chatbot nổi
+- `ChatPanel.tsx` - Panel chat chính
+- `ChatMessage.tsx` - Tin nhắn trong chat
+- `ChatMessageList.tsx` - Danh sách tin nhắn
+- `ChatInput.tsx` - Input để nhập tin nhắn
+- `ChatBubble.tsx` - Bubble design cho messages
+
+### UI Components (shadcn/ui)
+Các components tái sử dụng được:
+- `button.tsx` - Buttons
+- `card.tsx` - Cards
+- `input.tsx` - Input fields
+- `dialog.tsx` - Dialogs/Modals
+- `progress.tsx` - Progress bars
+- `toast.tsx` - Toast notifications
+- `badge.tsx` - Badges/Tags
+- `avatar.tsx` - User avatars
+- `table.tsx` - Tables
+- `tabs.tsx` - Tabs
+- `dropdown-menu.tsx` - Dropdown menus
+- `sheet.tsx` - Slide-out panels
+
+## Authentication Flow
+
+```
+User visits protected route
+    ↓
+Middleware checks auth token
+    ↓
+No token? → Redirect to /login
+    ↓
+Token exists? → Validate token
+    ↓
+Valid → Show page
+Invalid/Expired → Redirect to /login
+```
+
+## State Management
+
+### TanStack Query
+Quản lý server state (API data):
+```typescript
+const { data, isLoading, error } = useQuery({
+  queryKey: ['meals', date],
+  queryFn: () => mealService.getMeals(date),
+  staleTime: 5 * 60 * 1000, // 5 minutes
+});
+```
+
+### Auth Context
+Quản lý client state (auth):
+```typescript
+const { user, login, logout, isAuthenticated } = useAuth();
+```
+
+## API Services
+
+| Service | Mô tả |
+|---------|-------|
+| `auth.service.ts` | Đăng nhập, đăng ký, refresh token |
+| `meal.service.ts` | CRUD meal logs |
+| `profile.service.ts` | User profile |
+| `nutrition-goal.service.ts` | Nutrition goals |
+| `workout.service.ts` | Workout plans |
+| `analytics.service.ts` | Dashboard analytics |
+| `chatbot.service.ts` | AI chatbot |
+| `recommendation.service.ts` | AI recommendations |
+| `progress-log.service.ts` | Progress tracking |
+| `health-service.ts` | Health check |
+| `mockService.ts` | Mock data for development |
 
 ## API Client
 
-### Cấu hình
-
-`apps/web/src/lib/api-client.ts` — Axios instance:
-
-- **Base URL**: từ `NEXT_PUBLIC_API_BASE_URL` (`.env.local`)
-- **Timeout**: 30 giây
-- **Request Interceptor**: tự động gắn `Authorization: Bearer <token>` từ `localStorage`
-- **Response Interceptor**: nếu HTTP 401 → xóa token khỏi `localStorage`
-
-### JWT Token Storage
-
-- Token được lưu trong `localStorage` với key `smartmeal_access_token`
-- Các request tự động attach token (không cần manual)
-- Khi backend trả 401 → interceptor tự động xóa token và redirect về login
-
-### Ví dụ gọi API
-
+Axios instance với interceptors:
 ```typescript
-// apps/web/src/services/health-service.ts
-import { apiClient } from '@/lib/api-client';
+// Auto-add auth token
+apiClient.interceptors.request.use((config) => {
+  const token = localStorage.getItem('token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
 
-export async function getHealth() {
-  const res = await apiClient.get('/health');
-  return res.data;
-}
+// Handle errors
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      // Redirect to login
+    }
+    return Promise.reject(error);
+  }
+);
 ```
-
----
 
 ## Environment Variables
 
-Tạo file `apps/web/.env.local`:
+```env
+NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+```
+
+## Cách chạy
 
 ```bash
-NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
+# Cài đặt dependencies
+pnpm install
+
+# Chạy development server
+pnpm dev
+
+# Build production
+pnpm build
+
+# Run linter
+pnpm lint
 ```
 
-> **Lưu ý**: Chỉ biến có prefix `NEXT_PUBLIC_` mới được expose ra browser. API base URL cần public vì dùng ở client-side.
+## Responsive Design
 
----
+Ứng dụng hỗ trợ:
+- Mobile: < 768px
+- Tablet: 768px - 1024px
+- Desktop: > 1024px
 
-## Các lệnh
-
-```bash
-cd apps/web
-
-pnpm dev          # Dev server (Next.js 15, Turbopack)
-pnpm build        # Production build
-pnpm start        # Chạy production server
-pnpm lint         # ESLint
-```
-
----
-
-## Tailwind CSS v4 — Cách cấu hình
-
-Tailwind v4 không dùng `tailwind.config.ts`. Thay vào đó, cấu hình trong CSS:
-
-```css
-/* apps/web/src/app/globals.css */
-@import "tailwindcss";
-
-@theme {
-  --color-background: #ffffff;
-  --color-foreground: #09090b;
-  --radius-lg: 0.5rem;
-  /* ... tất cả CSS variables cho shadcn/ui */
-}
-```
-
----
-
-## shadcn/ui — Thêm component mới
-
-```bash
-# Cài đặt shadcn/ui CLI
-npx shadcn@latest init
-
-# Thêm component mới
-npx shadcn@latest add button
-npx shadcn@latest add card
-npx shadcn@latest add dialog
-```
-
-Component mới sẽ được tạo trong `src/components/ui/`. File `components.json` chứa cấu hình shadcn (style, base color, aliases...).
-
----
-
-## Cấu hình TypeScript Path Aliases
-
-```json
-// tsconfig.json
-{
-  "compilerOptions": {
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["./src/*"]
-    }
-  }
-}
-```
-
-→ `@/` map đến `./src/`, ví dụ: `@/lib/utils`, `@/components/ui/button`, `@/services/health-service`
-
----
-
-## Backend Connection Test
-
-Trang test backend (`apps/web/src/app/page.tsx`):
-
-1. Gọi `GET /health` qua `getHealth()` service
-2. Hiển thị loading spinner (shadcn `Card` + `Button`)
-3. Nếu thành công → hiển thị JSON response từ backend
-4. Nếu lỗi → hiển thị thông báo lỗi
-
-Sau khi backend chạy ở `http://127.0.0.1:8000`, mở `http://localhost:3000` để test.
-
----
-
-## TODO — Các tính năng cần phát triển tiếp
-
-### Ưu tiên cao
-
-- [ ] **Auth pages** — Login, Register, Forgot Password UI
-- [ ] **Profile page** — Form nhập chiều cao, cân nặng, ngày sinh...
-- [ ] **Goals page** — Form đặt mục tiêu dinh dưỡng
-- [ ] **Meal Log page** — Ghi nhận bữa ăn thủ công, tìm kiếm thực phẩm
-- [ ] **AI Meal Update UI** — Chụp ảnh / upload ảnh món ăn, preview kết quả AI
-
-### Ưu tiên trung bình
-
-- [ ] **Dashboard page** — Biểu đồ calo/macro tuần (Recharts)
-- [ ] **Workout page** — Kế hoạch tập luyện, danh sách bài tập
-- [ ] **Progress Logs page** — Nhật ký cân nặng, % mỡ, ảnh tiến bộ
-- [ ] **AI Daily Planner page** — Xem gợi ý ngày mới từ AI
-
-### Ưu tiên thấp
-
-- [ ] **AI Chatbot UI** — Giao diện chat với AI Coach (message bubbles, input)
-- [ ] **Settings page** — Đổi mật khẩu, cài đặt tài khoản
-- [ ] **Admin page** — Quản lý food nutrition database (verify foods)
-
----
-
-## ESLint & Code Quality
-
-```bash
-pnpm lint  # Chạy ESLint (next/core-web-vitals + next/typescript)
-```
-
-ESLint config tại `.eslintrc.json` extend `next/core-web-vitals` và `next/typescript`.
+Tailwind breakpoints:
+- `md:` - Tablet+
+- `lg:` - Desktop+

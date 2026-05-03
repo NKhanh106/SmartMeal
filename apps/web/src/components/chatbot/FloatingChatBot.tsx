@@ -5,7 +5,7 @@ import { ChatBubble } from "./ChatBubble";
 import { ChatPanel } from "./ChatPanel";
 
 export function FloatingChatBot() {
-  const { isOpen, messages, inputValue, isTyping, setInputValue, toggleChat, closeChat, sendMessage } =
+  const { isOpen, messages, inputValue, isTyping, isLoadingHistory, setInputValue, toggleChat, closeChat, sendMessage } =
     useChatBot();
 
   const handleSend = () => {

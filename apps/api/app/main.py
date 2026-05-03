@@ -1,5 +1,9 @@
+from contextlib import asynccontextmanager
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.api.v1 import (
     ai_chatbot,
@@ -11,15 +15,28 @@ from app.api.v1 import (
     meal_logs,
     nutrition_goals,
     progress_logs,
+    uploads,
     user_profiles,
     workout_plans,
 )
 from app.core.config import settings
+from app.services.image_cleanup_scheduler import start_scheduler, stop_scheduler
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    start_scheduler()
+    yield
+    # Shutdown
+    stop_scheduler()
+
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
     description="Backend API for SmartMeal nutrition and fitness assistant - Powered by FastAPI",
+    lifespan=lifespan,
 )
 
 if settings.BACKEND_CORS_ORIGINS:
@@ -42,6 +59,13 @@ app.include_router(workout_plans.router, prefix=settings.API_V1_STR)
 app.include_router(ai_daily_planner.router, prefix=settings.API_V1_STR)
 app.include_router(ai_chatbot.router, prefix=settings.API_V1_STR)
 app.include_router(ai_meal_update.router, prefix=settings.API_V1_STR)
+app.include_router(uploads.router, prefix=settings.API_V1_STR)
+
+# ── Static files for uploaded images ─────────────────────────────────────────
+_upload_dir = Path(settings.UPLOAD_DIR).resolve()
+if not _upload_dir.exists():
+    _upload_dir.mkdir(parents=True, exist_ok=True)
+app.mount(settings.IMAGE_PUBLIC_BASE_URL, StaticFiles(directory=str(_upload_dir)), name="uploads")
 
 
 @app.get("/", tags=["General"])

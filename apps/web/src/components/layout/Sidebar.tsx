@@ -49,12 +49,12 @@ function Sidebar({ className }: { className?: string }) {
       )}
     >
       <div className="p-6">
-        <div className="flex items-center gap-3 mb-10">
+        <Link href="/dashboard" className="flex items-center gap-3 mb-10 cursor-pointer">
           <div className="h-8 w-8 bg-primary rounded-lg flex items-center justify-center text-white font-bold text-lg">
             S
           </div>
           <span className="font-extrabold text-xl tracking-tight">SmartMeal</span>
-        </div>
+        </Link>
 
         <nav className="space-y-1">
           {navItems.map((item) => {
@@ -107,14 +107,14 @@ function MobileNav() {
       <SheetContent side="left" className="p-0 w-[240px] bg-white dark:bg-zinc-900">
         <div className="flex flex-col h-full">
           <div className="p-6">
-            <div className="flex items-center gap-3 mb-10">
+            <Link href="/dashboard" className="flex items-center gap-3 mb-10 cursor-pointer">
               <div className="h-8 w-8 bg-gradient-to-br from-emerald-400 to-emerald-600 rounded-lg flex items-center justify-center text-white font-bold text-lg">
                 S
               </div>
               <span className="font-extrabold text-xl tracking-tight">
                 SmartMeal
               </span>
-            </div>
+            </Link>
 
             <nav className="space-y-1">
               {navItems.map((item) => {

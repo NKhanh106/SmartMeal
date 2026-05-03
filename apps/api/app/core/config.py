@@ -61,14 +61,37 @@ class Settings(BaseSettings):
 
     USDA_API_KEY: str = ""
 
+    # ── Image Upload Settings ─────────────────────────────────────────────────
+    UPLOAD_DIR: str = "uploads"
+    MAX_IMAGE_SIZE_BYTES: int = 5 * 1024 * 1024  # 5 MB
+    IMAGE_PUBLIC_BASE_URL: str = "/uploads"
+
+    # Retention (days), NULL = never auto-delete
+    IMAGE_RETENTION_DAYS_MEAL: int | None = 7
+    IMAGE_RETENTION_DAYS_TEMPORARY: int | None = 1
+    IMAGE_RETENTION_DAYS_PROGRESS: int | None = None  # never auto-delete
+
     @model_validator(mode="after")
     def validate_non_dev_secrets(self) -> "Settings":
         env = self.ENVIRONMENT.lower()
         if env in {"production", "prod", "staging"}:
             if self.SECRET_KEY == "dev-only-change-me":
-                raise ValueError("SECRET_KEY must be configured outside development.")
+                raise ValueError(
+                    "SECRET_KEY must be set to a secure value in production. "
+                    "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(64))\""
+                )
             if not self.DATABASE_URL and self.POSTGRES_PASSWORD == "postgres":
-                raise ValueError("POSTGRES_PASSWORD or DATABASE_URL must be configured outside development.")
+                raise ValueError(
+                    "POSTGRES_PASSWORD or DATABASE_URL must be configured outside development."
+                )
+        elif env in {"development", "dev"}:
+            if self.SECRET_KEY == "dev-only-change-me":
+                import logging
+                logging.getLogger(__name__).warning(
+                    "[SmartMeal] WARNING: SECRET_KEY is using the default dev value. "
+                    "Set a secure SECRET_KEY in production environments. "
+                    "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(64))\""
+                )
         return self
 
     model_config = SettingsConfigDict(

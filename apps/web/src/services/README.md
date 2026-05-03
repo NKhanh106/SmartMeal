@@ -1,122 +1,323 @@
-# services/ — Frontend API Services
+# Thư mục services/ - API Services
 
-Thư mục chứa các service functions — nơi duy nhất trong frontend gọi API endpoints của backend.
+## Mục đích
 
-## Quy tắc
+Chứa các **API service modules** - nơi định nghĩa tất cả các function để gọi API backend. Mỗi service tập trung vào một domain (auth, meals, profile, etc.) giúp code có tổ chức và dễ bảo trì.
 
-1. **Mỗi service = một domain** — không gộp chung nhiều domain vào 1 file.
-2. **Tất cả API calls phải qua `api`** (từ `@/lib/api-client`) — không dùng `fetch` trực tiếp.
-3. **Không hardcode base URL** — dùng `NEXT_PUBLIC_API_BASE_URL` từ `api-client.ts`.
-4. **Dùng TypeScript types** từ `@/lib/types/api` — không `any`.
-5. **Không gọi Gemini/OpenAI từ frontend** — chỉ gọi backend endpoints.
+## Tại sao tách riêng services?
 
-## Các services
+- **Separation of Concerns**: API calls tách biệt khỏi UI components
+- **Reusability**: Nhiều components có thể dùng chung service
+- **Type Safety**: TypeScript interfaces cho request/response
+- **Error Handling**: Tập trung xử lý lỗi ở một chỗ
+- **Testing**: Dễ dàng mock services cho unit tests
 
-| Service | File | Backend prefix | Mô tả |
-|---------|------|---------------|--------|
-| `auth` | `auth.service.ts` | `/api/v1/auth` | Login, register, logout, get current user |
-| `profile` | `profile.service.ts` | `/api/v1/user-profiles` | CRUD health profile |
-| `nutrition-goal` | `nutrition-goal.service.ts` | `/api/v1/nutrition-goals` | Calculate BMR/TDEE, create/view active goal |
-| `meal` | `meal.service.ts` | `/api/v1/meal-logs` + `/api/v1/ai/meal-update` | CRUD meal logs, upload ảnh AI preview/confirm |
-| `analytics` | `analytics.service.ts` | `/api/v1/dashboard` | Daily/weekly nutrition stats |
-| `workout` | `workout.service.ts` | `/api/v1/workout-plans` | CRUD workout plans, workout items |
-| `progress-log` | `progress-log.service.ts` | `/api/v1/progress-logs` | CRUD body measurement logs |
-| `recommendation` | `recommendation.service.ts` | `/api/v1/ai/daily-planner` | Generate/view AI daily recommendations |
-| `chatbot` | `chatbot.service.ts` | — | **Mock only** — chưa có backend endpoint |
-| `health` | `health-service.ts` | `/health` | Backend health check |
-| `mock` | `mockService.ts` | — | Mock data cho development |
+## Cấu trúc
 
-## Cách gọi API đúng
-
-### Dùng `api` (typed helpers — khuyên dùng)
-
-```typescript
-import { api } from "@/lib/api-client";
-import type { MealLogResponse } from "@/lib/types/api";
-
-// GET request
-const meal: MealLogResponse = await api.get<MealLogResponse>(`/api/v1/meal-logs/${id}`);
-
-// POST request
-const created: MealLogResponse = await api.post<MealLogResponse>("/api/v1/meal-logs/", data);
-
-// DELETE request
-await api.delete<void>(`/api/v1/meal-logs/${id}`);
+```
+services/
+├── auth.service.ts           # Authentication
+├── meal.service.ts           # Meal management
+├── profile.service.ts        # User profile
+├── nutrition-goal.service.ts  # Nutrition goals
+├── workout.service.ts        # Workout plans
+├── analytics.service.ts      # Dashboard analytics
+├── chatbot.service.ts        # AI Chatbot
+├── recommendation.service.ts  # AI Recommendations
+├── progress-log.service.ts  # Progress tracking
+├── health-service.ts        # Health check
+└── mockService.ts           # Mock data for dev
 ```
 
-### Dùng `apiClient` (axios instance — khi cần custom config)
+## API Client Setup
+
+Base axios instance với interceptors:
 
 ```typescript
-import { apiClient } from "@/lib/api-client";
+// lib/api-client.ts
+import axios from "axios";
 
-// Dùng khi cần custom timeout, headers...
-const res = await apiClient.get("/some-endpoint", { timeout: 5000 });
-```
+const apiClient = axios.create({
+  baseURL: process.env.NEXT_PUBLIC_API_URL,
+  headers: {
+    "Content-Type": "application/json",
+  },
+});
 
-### Upload file (dùng `api.uploadFile`)
+// Request interceptor - add auth token
+apiClient.interceptors.request.use((config) => {
+  if (typeof window !== "undefined") {
+    const token = localStorage.getItem("token");
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+  }
+  return config;
+});
 
-```typescript
-import { api } from "@/lib/api-client";
-
-const formData = new FormData();
-formData.append("image", file);
-formData.append("meal_type", "bua_sang");
-
-const result = await api.uploadFile<MealUpdatePreviewResponse>(
-  "/api/v1/ai/meal-update/preview",
-  formData
+// Response interceptor - handle errors
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      // Token expired - redirect to login
+      localStorage.removeItem("token");
+      window.location.href = "/login";
+    }
+    return Promise.reject(error);
+  }
 );
+
+export default apiClient;
 ```
 
-> **Lưu ý**: Không set `Content-Type: multipart/form-data` thủ công khi upload file. Axios tự compute `boundary`. Đã có trong `api.uploadFile`.
+## Các Services
 
-## API Client Flow
-
+### auth.service.ts
+```typescript
+export const authService = {
+  // POST /api/v1/auth/register
+  register: (data: RegisterDTO) => 
+    apiClient.post("/api/v1/auth/register", data),
+  
+  // POST /api/v1/auth/login
+  login: (data: LoginDTO) => 
+    apiClient.post("/api/v1/auth/login", data),
+  
+  // POST /api/v1/auth/refresh
+  refreshToken: (token: string) => 
+    apiClient.post("/api/v1/auth/refresh", { refresh_token: token }),
+  
+  // POST /api/v1/auth/logout
+  logout: () => 
+    apiClient.post("/api/v1/auth/logout"),
+};
 ```
-Service function
-    ↓
-api.get() / api.post() / api.uploadFile() ...
-    ↓
-handleRequest() (unwrap axios response)
-    ↓
-apiClient (axios instance)
-    ↓
-Request Interceptor → gắn JWT token từ localStorage
-    ↓
-Backend
-    ↓
-Response Interceptor → nếu 401 → xóa token, throw ApiError
+
+### meal.service.ts
+```typescript
+export const mealService = {
+  // GET /api/v1/meal-logs?date=YYYY-MM-DD
+  getMeals: (date: string) => 
+    apiClient.get("/api/v1/meal-logs", { params: { date } }),
+  
+  // POST /api/v1/meal-logs
+  createMeal: (data: CreateMealDTO) => 
+    apiClient.post("/api/v1/meal-logs", data),
+  
+  // PUT /api/v1/meal-logs/{id}
+  updateMeal: (id: string, data: UpdateMealDTO) => 
+    apiClient.put(`/api/v1/meal-logs/${id}`, data),
+  
+  // DELETE /api/v1/meal-logs/{id}
+  deleteMeal: (id: string) => 
+    apiClient.delete(`/api/v1/meal-logs/${id}`),
+};
+```
+
+### profile.service.ts
+```typescript
+export const profileService = {
+  // GET /api/v1/user-profiles/me
+  getProfile: () => 
+    apiClient.get("/api/v1/user-profiles/me"),
+  
+  // PUT /api/v1/user-profiles/me
+  updateProfile: (data: UpdateProfileDTO) => 
+    apiClient.put("/api/v1/user-profiles/me", data),
+};
+```
+
+### nutrition-goal.service.ts
+```typescript
+export const nutritionGoalService = {
+  // GET /api/v1/nutrition-goals
+  getGoals: () => 
+    apiClient.get("/api/v1/nutrition-goals"),
+  
+  // POST /api/v1/nutrition-goals
+  createGoal: (data: CreateGoalDTO) => 
+    apiClient.post("/api/v1/nutrition-goals", data),
+  
+  // PUT /api/v1/nutrition-goals/{id}
+  updateGoal: (id: string, data: UpdateGoalDTO) => 
+    apiClient.put(`/api/v1/nutrition-goals/${id}`, data),
+};
+```
+
+### workout.service.ts
+```typescript
+export const workoutService = {
+  // GET /api/v1/workout-plans
+  getWorkoutPlans: () => 
+    apiClient.get("/api/v1/workout-plans"),
+  
+  // POST /api/v1/workout-plans
+  createPlan: (data: CreateWorkoutPlanDTO) => 
+    apiClient.post("/api/v1/workout-plans", data),
+  
+  // GET /api/v1/workout-sessions
+  getSessions: (params?: WorkoutSessionParams) => 
+    apiClient.get("/api/v1/workout-sessions", { params }),
+  
+  // POST /api/v1/workout-sessions
+  logSession: (data: LogSessionDTO) => 
+    apiClient.post("/api/v1/workout-sessions", data),
+};
+```
+
+### chatbot.service.ts
+```typescript
+export const chatbotService = {
+  // GET /api/v1/chat/sessions
+  getSessions: () => 
+    apiClient.get("/api/v1/chat/sessions"),
+  
+  // POST /api/v1/chat/sessions
+  createSession: () => 
+    apiClient.post("/api/v1/chat/sessions"),
+  
+  // GET /api/v1/chat/sessions/{id}/messages
+  getMessages: (sessionId: string) => 
+    apiClient.get(`/api/v1/chat/sessions/${sessionId}/messages`),
+  
+  // POST /api/v1/chat/sessions/{id}/messages
+  sendMessage: (sessionId: string, content: string) => 
+    apiClient.post(`/api/v1/chat/sessions/${sessionId}/messages`, { content }),
+};
+```
+
+### analytics.service.ts
+```typescript
+export const analyticsService = {
+  // GET /api/v1/dashboard/summary
+  getSummary: () => 
+    apiClient.get("/api/v1/dashboard/summary"),
+  
+  // GET /api/v1/dashboard/weekly
+  getWeeklyStats: () => 
+    apiClient.get("/api/v1/dashboard/weekly"),
+  
+  // GET /api/v1/dashboard/monthly
+  getMonthlyStats: () => 
+    apiClient.get("/api/v1/dashboard/monthly"),
+};
+```
+
+### mockService.ts
+```typescript
+// Mock data for development when API is not available
+export const mockService = {
+  getMockMeals: () => Promise.resolve(mockMealsData),
+  getMockProfile: () => Promise.resolve(mockProfileData),
+  getMockDashboard: () => Promise.resolve(mockDashboardData),
+};
+```
+
+## Sử dụng với TanStack Query
+
+```typescript
+// Trong component
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { mealService } from "@/services/meal.service";
+
+// Query - GET data
+function MealList({ date }: { date: string }) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["meals", date],
+    queryFn: () => mealService.getMeals(date),
+    staleTime: 5 * 60 * 1000, // 5 minutes
+  });
+  
+  if (isLoading) return <Skeleton />;
+  if (error) return <ErrorMessage />;
+  
+  return <MealListComponent meals={data} />;
+}
+
+// Mutation - POST/PUT/DELETE
+function AddMealButton() {
+  const queryClient = useQueryClient();
+  
+  const mutation = useMutation({
+    mutationFn: mealService.createMeal,
+    onSuccess: () => {
+      // Invalidate queries to refetch
+      queryClient.invalidateQueries({ queryKey: ["meals"] });
+      toast.success("Meal added!");
+    },
+    onError: () => {
+      toast.error("Failed to add meal");
+    },
+  });
+  
+  return (
+    <Button 
+      onClick={() => mutation.mutate(data)}
+      disabled={mutation.isPending}
+    >
+      {mutation.isPending ? "Adding..." : "Add Meal"}
+    </Button>
+  );
+}
+```
+
+## TypeScript Types
+
+```typescript
+// lib/types/api.ts
+export interface LoginDTO {
+  email: string;
+  password: string;
+}
+
+export interface RegisterDTO extends LoginDTO {
+  full_name: string;
+}
+
+export interface MealLogDTO {
+  id: string;
+  date: string;
+  meal_type: "breakfast" | "lunch" | "dinner" | "snack";
+  items: MealItemDTO[];
+  total_calories: number;
+  total_protein: number;
+  total_carbs: number;
+  total_fat: number;
+}
+
+export interface ApiResponse<T> {
+  success: boolean;
+  data: T;
+  message?: string;
+}
 ```
 
 ## Error Handling
 
 ```typescript
-import { api } from "@/lib/api-client";
-import { ApiError } from "@/lib/api-client";
-
-try {
-  const result = await api.post<MealLogResponse>("/api/v1/meal-logs/", data);
-} catch (err) {
-  if (err instanceof ApiError) {
-    console.error(`HTTP ${err.statusCode}: ${err.getUserMessage()}`);
-    if (err.statusCode === 401) {
-      // Redirect to login
+async function handleApiCall() {
+  try {
+    const response = await apiClient.post("/endpoint", data);
+    return response.data;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      if (error.response) {
+        // Server responded with error
+        const message = error.response.data?.message || "Server error";
+        throw new Error(message);
+      } else if (error.request) {
+        // No response received
+        throw new Error("Network error. Please check your connection.");
+      }
     }
+    throw new Error("An unexpected error occurred.");
   }
 }
 ```
 
-## Auth Token
+## Environment Variables
 
-Token được lưu trong `localStorage` key `smartmeal_access_token`. JWT interceptor tự động gắn vào mọi request. Khi backend trả 401, interceptor tự động xóa token.
-
-```typescript
-// apps/web/src/lib/api-client.ts
-apiClient.interceptors.request.use((config) => {
-  const token = localStorage.getItem(TOKEN_KEY);
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
+```env
+NEXT_PUBLIC_API_URL=http://localhost:8000
 ```

@@ -1,62 +1,190 @@
 /**
- * Chatbot service.
+ * Chatbot service — connects to SmartMeal backend AI Chatbot API.
  *
- * TODO: Replace mock responses with a real FastAPI chatbot endpoint.
- *   - Endpoint: POST /api/v1/chatbot/send
- *   - Body: { message: string }
- *   - Response: { reply: string }
+ * Flow:
+ * 1. getOrCreateSession() — creates a new chat session (once per browser session).
+ *    After creation, session ID is cached in sessionStorage.
+ * 2. sendMessage() — POST /api/v1/ai/chat/sessions/{session_id}/messages
+ *    Returns { user_message, assistant_message }
  *
- * DO NOT call Gemini API directly from the frontend.
- * DO NOT hardcode any API keys here.
+ * The backend handles:
+ * - User context building (profile, goals, dashboard, history)
+ * - AI generation via Groq
+ * - Message persistence
+ * - AI audit logging
  */
 
+import { api } from "@/lib/api-client";
 import type { ChatMessage } from "@/components/chatbot/types";
 
-// ─── Mock response bank ─────────────────────────────────────────────────────────
+const SESSION_CACHE_KEY = "smartmeal_chatbot_session_id";
+const CHATBOT_SESSION_ENDPOINT = "/api/v1/ai/chat/sessions";
+const CHATBOT_MESSAGES_ENDPOINT = (sessionId: string) =>
+  `${CHATBOT_SESSION_ENDPOINT}/${sessionId}/messages`;
 
-const MOCK_RESPONSES = [
-  "Mình đã nhận được câu hỏi của bạn. Ở bước tiếp theo, tính năng này sẽ được kết nối với AI backend.",
-  "Cảm ơn bạn đã hỏi! Tính năng chat thông minh đang được phát triển. Bạn có thể theo dõi cập nhật sắp tới nhé.",
-  "Mình hiểu rồi! Hiện tại chatbot đang chạy ở chế độ demo. Kết nối AI thật sẽ có trong phiên bản hoàn chỉnh.",
-  "Bạn có thể hỏi mình về dinh dưỡng, bữa ăn, luyện tập hoặc mục tiêu sức khỏe của bạn. Mình sẽ hỗ trợ ngay khi có thể!",
-  "Để có kết quả tốt nhất, hãy đảm bảo bạn đã thiết lập Health Profile và Nutrition Goal đầy đủ trong mục Profile nhé.",
-];
+// ─── Session management ─────────────────────────────────────────────────────────
 
-function randomMockResponse(): string {
-  return MOCK_RESPONSES[Math.floor(Math.random() * MOCK_RESPONSES.length)];
+interface ChatSessionResponse {
+  id: string;
+  user_id: string;
+  title: string | null;
+  status: string;
+  last_message_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
-// ─── Simulate network delay ─────────────────────────────────────────────────────
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+interface SendMessageResponse {
+  user_message: {
+    id: string;
+    session_id: string;
+    role: string;
+    content: string;
+    created_at: string;
+    [key: string]: unknown;
+  };
+  assistant_message: {
+    id: string;
+    session_id: string;
+    role: string;
+    content: string;
+    created_at: string;
+    [key: string]: unknown;
+  };
 }
 
-// ─── Service ───────────────────────────────────────────────────────────────────
+/**
+ * Get the cached session ID from sessionStorage.
+ * Returns null if no session exists yet.
+ */
+export function getCachedSessionId(): string | null {
+  if (typeof window === "undefined") return null;
+  return sessionStorage.getItem(SESSION_CACHE_KEY);
+}
+
+/**
+ * Cache a session ID in sessionStorage for this browser session.
+ */
+function cacheSessionId(sessionId: string): void {
+  if (typeof window !== "undefined") {
+    sessionStorage.setItem(SESSION_CACHE_KEY, sessionId);
+  }
+}
+
+/**
+ * Get the existing chat session or create a new one.
+ * Reuses cached session if available to maintain conversation history.
+ */
+export async function getOrCreateSession(): Promise<ChatSessionResponse> {
+  const cached = getCachedSessionId();
+  if (cached) {
+    // Verify the session still exists by fetching its messages
+    try {
+      await api.get<unknown[]>(`${CHATBOT_SESSION_ENDPOINT}/${cached}/messages`);
+      // Session still valid — return it
+      return { id: cached, user_id: "", title: null, status: "active", last_message_at: null, created_at: "", updated_at: "" };
+    } catch {
+      // Session expired or invalid — clear cache and create new
+      sessionStorage.removeItem(SESSION_CACHE_KEY);
+    }
+  }
+
+  // Create a new session
+  const session = await api.post<ChatSessionResponse>(CHATBOT_SESSION_ENDPOINT, {});
+  cacheSessionId(session.id);
+  return session;
+}
+
+/**
+ * Fetch all messages for the current session.
+ * Used on initial load to restore conversation history.
+ */
+export async function fetchSessionMessages(sessionId: string): Promise<ChatMessage[]> {
+  const messages = await api.get<ChatSessionResponse[]>(
+    `${CHATBOT_SESSION_ENDPOINT}/${sessionId}/messages`
+  );
+
+  return messages.map((msg) => ({
+    id: msg.id,
+    role: msg.role as "user" | "assistant",
+    content: msg.content,
+    timestamp: new Date(msg.created_at),
+  }));
+}
+
+// ─── Send message ───────────────────────────────────────────────────────────────
+
+export interface SendMessageOptions {
+  signal?: AbortSignal;
+}
 
 export const chatbotService = {
   /**
-   * Send a chat message and receive a reply.
+   * Send a message and receive an AI reply.
    *
-   * Currently returns a mock response after a simulated delay.
+   * Internally:
+   * - Gets or creates a persistent chat session.
+   * - POSTs the message to the backend.
+   * - Backend builds user context, calls Groq AI, and returns both messages.
    *
-   * TODO: Replace with real API call:
-   *   const res = await api.post<{ reply: string }>("/api/v1/chatbot/send", { message });
-   *   return res.reply;
+   * @param content  The user's message text.
+   * @param options  AbortSignal for cancellation.
+   * @returns The assistant's ChatMessage reply.
    */
   async sendMessage(
-    _message: string,
-    _options?: { signal?: AbortSignal }
+    content: string,
+    options?: SendMessageOptions
   ): Promise<ChatMessage> {
-    // Simulate typing delay
-    await delay(1200 + Math.random() * 800);
+    // Ensure we have a session
+    const session = await getOrCreateSession();
 
-    const now = new Date();
+    // Cache the session ID if not already cached
+    cacheSessionId(session.id);
+
+    const response = await api.post<SendMessageResponse>(
+      CHATBOT_MESSAGES_ENDPOINT(session.id),
+      { content },
+      options?.signal
+        ? {
+            // Pass AbortSignal via custom config — axios needs adapter interceptors
+            signal: options.signal,
+          }
+        : undefined
+    );
+
+    const assistantMsg = response.assistant_message;
+
     return {
-      id: `msg-${now.getTime()}-${Math.random().toString(36).slice(2, 7)}`,
-      role: "assistant",
-      content: randomMockResponse(),
-      timestamp: now,
+      id: assistantMsg.id,
+      role: assistantMsg.role as "user" | "assistant",
+      content: assistantMsg.content,
+      timestamp: new Date(assistantMsg.created_at),
     };
+  },
+
+  /**
+   * Restore messages from a previous session.
+   * Call this on initial load to show conversation history.
+   */
+  async restoreMessages(): Promise<ChatMessage[]> {
+    const sessionId = getCachedSessionId();
+    if (!sessionId) return [];
+
+    try {
+      return await fetchSessionMessages(sessionId);
+    } catch {
+      return [];
+    }
+  },
+
+  /**
+   * Force-create a new session (clears cached session).
+   * Useful for "New conversation" button.
+   */
+  async startNewSession(): Promise<ChatSessionResponse> {
+    if (typeof window !== "undefined") {
+      sessionStorage.removeItem(SESSION_CACHE_KEY);
+    }
+    return getOrCreateSession();
   },
 };

@@ -12,3 +12,6 @@ test-api:
 
 migrate-api:
 	cd apps/api && alembic upgrade head
+
+seed-api:
+	cd apps/api && python scripts/seed_food_data.py

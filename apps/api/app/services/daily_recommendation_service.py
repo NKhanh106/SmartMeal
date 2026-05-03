@@ -15,30 +15,21 @@ from app.ai.prompts.daily_planner_prompt import (
     build_daily_planner_user_prompt,
 )
 from app.core.config import settings
+from app.core.utils import (
+    get_active_goal,
+    serialize_dict,
+)
 from app.models.daily_recommendation import DailyRecommendation
 from app.models.nutrition_goal import NutritionGoal
 from app.models.user_profile import UserProfile
 from app.schemas.daily_recommendation import DailyPlannerAIResult
 from app.services.ai_log_service import create_ai_log
 from app.services.dashboard_service import get_daily_dashboard, get_weekly_dashboard
-
-
-def decimal_to_float(value):
-    if isinstance(value, Decimal):
-        return float(value)
-    return value
-
-
-def serialize_dict(obj):
-    if isinstance(obj, dict):
-        return {k: serialize_dict(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [serialize_dict(v) for v in obj]
-    if isinstance(obj, Decimal):
-        return float(obj)
-    if isinstance(obj, (date, UUID)):
-        return str(obj)
-    return obj
+from app.services.planner_constraint_engine import (
+    build_constraints_from_profile_and_goal,
+    build_constraint_guidance,
+    validate_recommendation,
+)
 
 
 async def get_active_goal(db: AsyncSession, user_id: UUID):

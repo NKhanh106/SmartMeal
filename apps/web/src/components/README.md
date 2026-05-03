@@ -1,68 +1,302 @@
-# components/ — React Components
+# Thư mục components/ - React Components
 
-Thư mục chứa tất cả React components được sử dụng trong ứng dụng.
+## Mục đích
+
+Chứa tất cả **React components** được sử dụng trong ứng dụng SmartMeal Web. Components được tổ chức theo chức năng để dễ dàng tìm kiếm và quản lý.
 
 ## Cấu trúc
 
 ```
 components/
-├── ui/          # shadcn/ui atomic components (Button, Card, Input...)
-├── layout/      # Layout components (Sidebar, Header, DashboardLayout)
-└── chatbot/     # Chatbot UI components (ChatPanel, FloatingChatBot...)
+├── chatbot/           # AI Chatbot UI components
+│   ├── ChatPanel.tsx
+│   ├── FloatingChatBot.tsx
+│   ├── ChatMessage.tsx
+│   ├── ChatMessageList.tsx
+│   ├── ChatInput.tsx
+│   ├── ChatBubble.tsx
+│   └── ChatHeader.tsx
+├── layout/           # Layout components
+│   ├── Header.tsx
+│   ├── Sidebar.tsx
+│   └── DashboardLayout.tsx
+└── ui/               # shadcn/ui base components
+    ├── button.tsx
+    ├── card.tsx
+    ├── input.tsx
+    ├── dialog.tsx
+    ├── progress.tsx
+    ├── toast.tsx
+    ├── badge.tsx
+    ├── avatar.tsx
+    ├── table.tsx
+    ├── tabs.tsx
+    ├── dropdown-menu.tsx
+    ├── scroll-area.tsx
+    ├── sheet.tsx
+    ├── skeleton.tsx
+    ├── label.tsx
+    └── separator.tsx
 ```
 
-## ui/ — Atomic Components
+## Component Categories
 
-Các thành phần giao diện nguyên tử, xây dựng bằng **shadcn/ui** (Radix UI primitives + Tailwind CSS).
+### 1. Layout Components
 
-| Component | File | Mô tả |
-|-----------|------|--------|
-| `Button` | `ui/button.tsx` | Nút bấm với các variant: `default`, `outline`, `ghost`, `destructive`, `link` |
-| `Card` | `ui/card.tsx` | Container card với CardHeader, CardContent, CardFooter |
-| `Input` | `ui/input.tsx` | Input field chuẩn form |
-| `Label` | `ui/label.tsx` | Label cho form inputs |
-| `Badge` | `ui/badge.tsx` | Tag/label nhỏ |
-| `Progress` | `ui/progress.tsx` | Thanh tiến trình |
-| `Avatar` | `ui/avatar.tsx` | Avatar người dùng (hình tròn) |
-| `Dialog` | `ui/dialog.tsx` | Modal dialog (Radix Dialog) |
-| `DropdownMenu` | `ui/dropdown-menu.tsx` | Dropdown menu (Radix DropdownMenu) |
-| `Sheet` | `ui/sheet.tsx` | Slide-in panel (mobile sidebar) |
-| `Tabs` | `ui/tabs.tsx` | Tab navigation |
-| `Table` | `ui/table.tsx` | Table components |
-| `Separator` | `ui/separator.tsx` | Đường phân cách |
-| `Skeleton` | `ui/skeleton.tsx` | Loading placeholder |
-| `ScrollArea` | `ui/scroll-area.tsx` | Custom scroll area |
-| `Toast` | `ui/toast.tsx` | Toast notification |
-| `Toaster` | `ui/toaster.tsx` | Toast container (render trong root layout) |
+#### Header.tsx
+Thanh header chính của ứng dụng:
+- Logo và app name
+- Navigation links
+- User avatar dropdown
+- Notification bell
+- Mobile hamburger menu
 
-## layout/ — Layout Components
+#### Sidebar.tsx
+Thanh sidebar cho dashboard:
+- Navigation menu items
+- Active state highlighting
+- Collapsible on mobile
+- Icons cho mỗi menu item
 
-Các component liên quan đến bố cục trang, chạy xuyên suốt ứng dụng.
+#### DashboardLayout.tsx
+Wrapper layout cho tất cả dashboard pages:
+- Header at top
+- Sidebar on left
+- Main content area
+- Responsive design
 
-| Component | File | Mô tả |
-|-----------|------|--------|
-| `Sidebar` | `layout/Sidebar.tsx` | Thanh điều hướng bên trái — logo, nav items với hover/active states |
-| `Header` | `layout/Header.tsx` | Thanh header trên cùng — search, notifications, user avatar |
-| `DashboardLayout` | `layout/DashboardLayout.tsx` | Layout wrapper — sidebar (260px) + content area, responsive (Sheet trên mobile) |
+### 2. Chatbot Components
 
-## chatbot/ — Chatbot UI
+#### FloatingChatBot.tsx
+Nút chatbot nổi ở góc màn hình:
+- Floating action button
+- Opens ChatPanel on click
+- Badge showing unread messages
+- Animation on hover
 
-Các component xây dựng giao diện chatbot AI.
+#### ChatPanel.tsx
+Panel chat chính:
+- Chat header với close button
+- Message list area
+- Input area
+- Typing indicator
+- Auto-scroll to latest message
 
-| Component | File | Mô tả |
-|-----------|------|--------|
-| `FloatingChatBot` | `chatbot/FloatingChatBot.tsx` | Nút bong bóng chat góc phải dưới màn hình — bật/tắt panel |
-| `ChatPanel` | `chatbot/ChatPanel.tsx` | Panel chat chính — animation slide-up, shadow lớn |
-| `ChatHeader` | `chatbot/ChatHeader.tsx` | Header của panel — tiêu đề "SmartMeal Coach", nút đóng |
-| `ChatMessageList` | `chatbot/ChatMessageList.tsx` | Danh sách tin nhắn — auto-scroll xuống cuối |
-| `ChatMessage` | `chatbot/ChatMessage.tsx` | Tin nhắn đơn lẻ — assistant (emerald avatar) hoặc user (slate avatar) |
-| `ChatInput` | `chatbot/ChatInput.tsx` | Input nhập tin nhắn — textarea auto-resize, nút gửi |
-| `ChatBubble` | `chatbot/ChatBubble.tsx` | Nút bong bóng chat — gradient emerald, icon Sparkles, pulse animation |
-| `types` | `chatbot/types.ts` | Shared TypeScript types cho chatbot |
+#### ChatMessage.tsx
+Hiển thị một tin nhắn:
+- User message (right side)
+- Assistant message (left side)
+- Timestamp
+- Avatar
+- Different styles for user/assistant
 
-## Quy tắc
+#### ChatMessageList.tsx
+Danh sách tin nhắn:
+- Scrollable container
+- Auto-scroll to bottom
+- Virtual scrolling for long lists
+- Date separators
 
-- **UI components** phải nhận props chuẩn, không hardcode business logic.
-- **Không gọi API trực tiếp** trong components — dùng services.
-- **Lucide React** là thư viện icons chính.
-- Styles dùng **Tailwind CSS v4** với CSS variables từ `globals.css`.
+#### ChatInput.tsx
+Input để nhập tin nhắn:
+- Text input
+- Send button
+- Loading state
+- Character counter
+
+#### ChatBubble.tsx
+Design cho bubble tin nhắn:
+- Rounded corners
+- User vs Assistant styling
+- Max width constraint
+- Word wrap
+
+#### ChatHeader.tsx
+Header của chat panel:
+- Title "SmartMeal Assistant"
+- Status indicator
+- Minimize/Close buttons
+
+### 3. UI Components (shadcn/ui)
+
+Đây là các base components được cung cấp bởi [shadcn/ui](https://ui.shadcn.com/), một collection của reusable components được xây dựng trên Radix UI và Tailwind CSS.
+
+#### button.tsx
+```typescript
+<Button variant="default" size="default">Click me</Button>
+// Variants: default, destructive, outline, secondary, ghost, link
+// Sizes: default, sm, lg, icon
+```
+
+#### card.tsx
+```typescript
+<Card>
+  <CardHeader>
+    <CardTitle>Title</CardTitle>
+    <CardDescription>Description</CardDescription>
+  </CardHeader>
+  <CardContent>Content</CardContent>
+  <CardFooter>Footer</CardFooter>
+</Card>
+```
+
+#### input.tsx
+```typescript
+<Input placeholder="Enter text..." />
+```
+
+#### dialog.tsx
+```typescript
+<Dialog>
+  <DialogTrigger>Open</DialogTrigger>
+  <DialogContent>
+    <DialogHeader>
+      <DialogTitle>Title</DialogTitle>
+    </DialogHeader>
+    Content here
+  </DialogContent>
+</Dialog>
+```
+
+#### progress.tsx
+```typescript
+<Progress value={50} />
+```
+
+#### toast.tsx
+```typescript
+// Using useToast hook
+const { toast } = useToast();
+toast({ title: "Success", description: "Meal logged!" });
+```
+
+#### badge.tsx
+```typescript
+<Badge variant="default">New</Badge>
+// Variants: default, secondary, destructive, outline
+```
+
+#### avatar.tsx
+```typescript
+<Avatar>
+  <AvatarImage src="/avatar.jpg" />
+  <AvatarFallback>JD</AvatarFallback>
+</Avatar>
+```
+
+## Component Patterns
+
+### Server vs Client Components
+
+**Server Component** (không có "use client"):
+```typescript
+// Header.tsx - Server component
+export function Header() {
+  return <header>...</header>;
+}
+```
+
+**Client Component** (có "use client"):
+```typescript
+"use client";
+// ChatPanel.tsx - Client component với state
+export function ChatPanel() {
+  const [isOpen, setIsOpen] = useState(false);
+  // ...
+}
+```
+
+### Component Composition
+
+```typescript
+// Reusable wrapper
+export function Card({ 
+  children, 
+  className 
+}: { 
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cn("rounded-lg border bg-card", className)}>
+      {children}
+    </div>
+  );
+}
+
+// Usage
+<Card className="p-4">
+  <h2>Title</h2>
+  <p>Content</p>
+</Card>
+```
+
+### TypeScript Props
+
+```typescript
+interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: "default" | "destructive" | "outline";
+  size?: "default" | "sm" | "lg";
+  isLoading?: boolean;
+}
+
+export function Button({
+  children,
+  variant = "default",
+  size = "default",
+  isLoading = false,
+  className,
+  ...props
+}: ButtonProps) {
+  return (
+    <button
+      className={cn(styles[variant], styles[size], className)}
+      disabled={isLoading || props.disabled}
+      {...props}
+    >
+      {isLoading ? <Spinner /> : children}
+    </button>
+  );
+}
+```
+
+## Styling với Tailwind CSS
+
+Components sử dụng Tailwind CSS cho styling:
+- `cn()` utility để merge classnames
+- CSS variables cho theming
+- Responsive classes (sm:, md:, lg:)
+- Dark mode support
+
+```typescript
+import { type ClassValue, clsx } from "clsx";
+import { twMerge } from "tailwind-merge";
+
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
+}
+
+// Usage
+<div className={cn(
+  "p-4",
+  isActive && "bg-primary",
+  className
+)} />
+```
+
+## Accessibility
+
+Tất cả components tuân thủ WCAG guidelines:
+- Semantic HTML
+- ARIA labels
+- Keyboard navigation
+- Focus management
+- Screen reader support
+
+## Best Practices
+
+1. **Colocation**: Giữ component files cùng với related files
+2. **Small components**: Tách nhỏ components khi có thể
+3. **Props types**: Luôn định nghĩa TypeScript types cho props
+4. **Default exports**: Ưu tiên named exports
+5. **Single responsibility**: Mỗi component nên làm một việc

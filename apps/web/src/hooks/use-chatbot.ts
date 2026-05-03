@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import type { ChatMessage } from "@/components/chatbot/types";
 import { chatbotService } from "@/services/chatbot.service";
 
@@ -17,11 +17,37 @@ export function useChatBot() {
   const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE]);
   const [inputValue, setInputValue] = useState("");
   const [isTyping, setIsTyping] = useState(false);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const historyLoadedRef = useRef(false);
+
+  // Restore conversation history when chat is first opened
+  useEffect(() => {
+    if (isOpen && !historyLoadedRef.current) {
+      historyLoadedRef.current = true;
+      setIsLoadingHistory(true);
+      chatbotService
+        .restoreMessages()
+        .then((history) => {
+          if (history.length > 0) {
+            setMessages((prev) => {
+              // Keep welcome message, append history
+              const withoutWelcome = prev[0]?.id === "welcome" ? prev.slice(1) : prev;
+              return [...withoutWelcome, ...history];
+            });
+          }
+        })
+        .catch(() => {
+          // Silently ignore history load errors
+        })
+        .finally(() => {
+          setIsLoadingHistory(false);
+        });
+    }
+  }, [isOpen]);
 
   const openChat = useCallback(() => setIsOpen(true), []);
   const closeChat = useCallback(() => setIsOpen(false), []);
-
   const toggleChat = useCallback(() => setIsOpen((prev) => !prev), []);
 
   const sendMessage = useCallback(
@@ -49,11 +75,16 @@ export function useChatBot() {
         });
         setMessages((prev) => [...prev, reply]);
       } catch (err) {
-        if ((err as Error).name === "AbortError") return;
+        // Ignore abort errors
+        if ((err as Error).name === "CanceledError" || (err as Error).name === "AbortError") {
+          return;
+        }
+        // Show error message to user
         const errorMsg: ChatMessage = {
           id: `msg-${Date.now()}-error`,
           role: "assistant",
-          content: "Xin lỗi, đã có lỗi xảy ra. Vui lòng thử lại.",
+          content:
+            "Xin lỗi, tôi đang gặp sự cố kết nối. Vui lòng thử lại trong giây lát.",
           timestamp: new Date(),
         };
         setMessages((prev) => [...prev, errorMsg]);
@@ -69,6 +100,7 @@ export function useChatBot() {
     messages,
     inputValue,
     isTyping,
+    isLoadingHistory,
     setInputValue,
     openChat,
     closeChat,

@@ -11,6 +11,7 @@ from app.models.daily_recommendation import DailyRecommendation
 from app.models.meal import MealLog
 from app.models.nutrition_goal import NutritionGoal
 from app.models.user_profile import UserProfile
+from app.services.conversation_insights_service import get_active_insights
 from app.services.dashboard_service import get_daily_dashboard, get_weekly_dashboard
 
 
@@ -171,5 +172,19 @@ async def build_chatbot_context(
             "lifestyle_suggestion": latest_recommendation.lifestyle_suggestion,
             "ai_summary": latest_recommendation.ai_summary,
         }
+
+    # ── Conversation Insights ───────────────────────────────────────────────────
+    # Thông tin cốt lõi trích xuất từ các cuộc trò chuyện trước đó
+    active_insights = await get_active_insights(db=db, user_id=user_id)
+    if active_insights:
+        context["conversation_insights"] = [
+            {
+                "type": insight.insight_type,
+                "key": insight.key,
+                "summary": insight.summary,
+                "value": insight.value,
+            }
+            for insight in active_insights
+        ]
 
     return serialize_dict(context)

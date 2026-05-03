@@ -1,6 +1,0 @@
-{
-  "name": "SmartMeal",
-  "description": "Personalized nutrition and workout support system for healthy living.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["nutrition tracking", "workout planning", "meal analysis"]
-}

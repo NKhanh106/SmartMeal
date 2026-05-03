@@ -1,330 +1,188 @@
-# ⚙️ SmartMeal Backend — FastAPI
+# SmartMeal API - Backend Server
 
-## Tổng quan
+## Mục đích
 
-Backend của SmartMeal được viết bằng **FastAPI** với database **PostgreSQL** (SQLAlchemy 2.0 async) và migrations qua **Alembic**. Hệ thống tuân theo **Layered Architecture** (API → Service → Data), với AI layer tách biệt hoàn toàn khỏi business logic.
+Đây là **backend server** của ứng dụng SmartMeal, được xây dựng bằng **FastAPI** (Python) kết hợp với cơ sở dữ liệu **PostgreSQL**. API này cung cấp tất cả các endpoint cần thiết để phục vụ ứng dụng web và mobile, bao gồm xác thực người dùng, quản lý dinh dưỡng, bài tập thể dục, chatbot AI, và hệ thống phân tích dữ liệu.
 
----
+## Công nghệ sử dụng
+
+- **Framework**: FastAPI - web framework hiệu đại, hỗ trợ async, auto-generated OpenAPI docs
+- **Database**: PostgreSQL - cơ sở dữ liệu quan hệ mạnh mẽ
+- **ORM**: SQLAlchemy - ánh xạ đối tượng quan hệ, giúp làm việc với database dễ dàng hơn
+- **Validation**: Pydantic - thư viện xác thực dữ liệu và serialization
+- **Migrations**: Alembic - quản lý phiên bản database schema
+- **Authentication**: JWT (JSON Web Token) với Passlib/Bcrypt để hash mật khẩu
+- **AI Integration**: Google Generative AI (Gemini) và Groq - cung cấp khả năng AI cho chatbot và đề xuất thông minh
+- **Testing**: Pytest - framework testing cho Python
 
 ## Cấu trúc thư mục
 
 ```
 apps/api/
-├── app/
-│   ├── main.py                  # FastAPI entry point, CORS, router mount
-│   ├── dependencies.py          # Shared FastAPI dependencies
-│   │
-│   ├── api/                     # ── Layer 1: API Routes ──
-│   │   └── v1/
-│   │       ├── router.py        # Gộp tất cả sub-routers vào prefix /api/v1
-│   │       ├── deps.py          # Auth dependencies (get_current_user, ensure_user_access)
-│   │       ├── auth.py          # /auth — register, login, me
-│   │       ├── user_profiles.py # /user-profiles
-│   │       ├── nutrition_goals.py # /nutrition-goals
-│   │       ├── food_nutrition.py # /food-nutrition
-│   │       ├── meal_logs.py     # /meal-logs
-│   │       ├── dashboard.py     # /dashboard
-│   │       ├── progress_logs.py # /progress-logs
-│   │       ├── workout_plans.py # /workout-plans
-│   │       ├── ai_chatbot.py    # /ai/chat
-│   │       ├── ai_daily_planner.py # /ai/daily-planner
-│   │       └── ai_meal_update.py # /ai/meal-update
-│   │
-│   ├── services/                 # ── Layer 2: Business Logic ──
-│   │   ├── auth_service.py      # (inline trong auth.py)
-│   │   ├── meal_service.py       # Tạo meal + meal_items, cascade
-│   │   ├── nutrition_service.py  # Tính BMR/TDEE/BMI (Mifflin-St Jeor)
-│   │   ├── dashboard_service.py # Tổng hợp calo/macro ngày & tuần
-│   │   ├── progress_log_service.py # Upsert progress log
-│   │   ├── workout_service.py   # CRUD workout plan & items
-│   │   ├── food_nutrition_service.py # Ước lượng dinh dưỡng theo cân nặng
-│   │   ├── ai_log_service.py    # Ghi AI call logs
-│   │   ├── ai_meal_update_service.py # Gọi AI nhận diện ảnh, map kết quả
-│   │   └── daily_recommendation_service.py # Sinh gợi ý ngày mới
-│   │
-│   ├── chatbot/                 # ── AI Chatbot Module ──
-│   │   ├── service.py           # Luồng: tạo session → lưu tin nhắn → gọi AI → log
-│   │   ├── context_builder.py  # Trích xuất context từ DB (profile, goals, meals...)
-│   │   ├── context_policy.py    # Giới hạn số lượng message/meal đưa vào context
-│   │   ├── prompts.py           # System prompt định nghĩa vai trò AI Coach
-│   │   └── utils.py            # Tiện ích (auto-title từ tin nhắn đầu)
-│   │
-│   ├── ai/                      # ── AI Provider Abstraction ──
-│   │   ├── base.py             # Abstract class AIProvider (generate_text, generate_json, analyze_image_json)
-│   │   ├── factory.py          # Factory: chọn provider theo env, có caching
-│   │   ├── providers/
-│   │   │   ├── gemini_provider.py # Implement Gemini SDK
-│   │   │   └── groq_provider.py  # Implement Groq SDK
-│   │   └── prompts/
-│   │       └── daily_planner_prompt.py # Prompt template cho daily planner
-│   │
-│   ├── models/                  # ── Layer 3: Data Access (SQLAlchemy 2.0) ──
-│   │   ├── enums.py            # PostgreSQL ENUM types (Gender, ActivityLevel, MealType...)
-│   │   ├── user.py             # Bảng users
-│   │   ├── user_profile.py     # Bảng user_profiles
-│   │   ├── nutrition_goal.py   # Bảng nutrition_goals
-│   │   ├── food_nutrition.py   # Bảng food_nutrition
-│   │   ├── meal.py             # Bảng meals (meal_logs) + meal_items
-│   │   ├── progress_log.py     # Bảng progress_logs
-│   │   ├── workout_plan.py     # Bảng workout_plans + workout_items
-│   │   ├── ai_log.py          # Bảng ai_analysis_logs
-│   │   ├── daily_recommendation.py # Bảng daily_recommendations
-│   │   └── chat.py            # Bảng chat_sessions + chat_messages
-│   │
-│   ├── schemas/                 # ── Pydantic Schemas ──
-│   │   ├── user.py             # UserCreate, UserResponse
-│   │   ├── user_profile.py     # UserProfileCreate/Update/Response
-│   │   ├── nutrition_goal.py   # NutritionGoalCreate/Calculate/Response
-│   │   ├── food_nutrition.py   # FoodNutritionCreate/Update/Response
-│   │   ├── meal.py             # MealLogCreate/Response, MealItemCreate
-│   │   ├── meal_update.py      # AIMealUpdateOutput, MealUpdatePreview, Confirm
-│   │   ├── dashboard.py        # DailyDashboardResponse, WeeklyDashboardResponse
-│   │   ├── progress_log.py     # ProgressLogCreate/Update/Response
-│   │   ├── workout.py          # WorkoutPlanCreate, WorkoutItemCreate/Update
-│   │   ├── chat.py             # ChatSessionCreate/Response, ChatMessageCreate/Response
-│   │   ├── daily_recommendation.py # DailyRecommendationResponse
-│   │   ├── token.py            # Token, TokenData
-│   │   └── ai_log.py          # AiLogCreate
-│   │
-│   ├── core/                    # ── Core Infrastructure ──
-│   │   ├── config.py           # Pydantic Settings — load & validate all env vars
-│   │   └── security.py         # bcrypt hashing, JWT create/verify
-│   │
-│   └── db/                      # ── Database Setup ──
-│       └── session.py          # AsyncEngine + AsyncSession factory
-│
-├── alembic/                      # Database migrations
-│   ├── versions/
-│   │   ├── 20260427_0001_initial_core_schema.py # Bảng core đầu tiên
-│   │   └── 20260429_0002_add_progress_workout_tables.py # Progress + Workout tables
-│   ├── env.py
-│   ├── alembic.ini
-│   └── script.py.mako
-│
-├── tests/                        # Pytest tests
-│   ├── conftest.py              # Fixtures (db session, test client)
-│   ├── test_auth.py
-│   ├── test_profile.py
-│   ├── test_nutrition.py
-│   ├── test_validation_and_meals.py
-│   └── test_food_permissions.py
-│
-├── Makefile                      # Lệnh: install, dev, migrate, test, lint
-├── requirements.txt              # Python dependencies
-├── .env.example                  # Template biến môi trường
-└── Dockerfile
+├── app/                    # Thư mục chính chứa toàn bộ code backend
+│   ├── main.py            # Entry point - khởi tạo ứng dụng FastAPI
+│   ├── api/               # Định nghĩa tất cả API endpoints
+│   │   └── v1/           # Phiên bản API v1 (để dễ dàng mở rộng sau này)
+│   ├── models/            # SQLAlchemy ORM models - ánh xạ bảng trong database
+│   ├── schemas/           # Pydantic schemas - xác thực request/response
+│   ├── services/          # Business logic - logic nghiệp vụ chính
+│   ├── ai/                # Tích hợp AI providers (Gemini, Groq)
+│   ├── chatbot/           # Hệ thống chatbot AI
+│   ├── core/              # Cấu hình, bảo mật, constants
+│   └── db/                # Kết nối database
+├── alembic/               # Quản lý database migrations
+│   └── versions/         # Các script migration
+├── tests/                # Unit tests cho backend
+├── Dockerfile            # Docker configuration
+├── Makefile              # Các lệnh tiện ích (chạy server, migration, ...)
+├── requirements.txt      # Python dependencies
+└── pyproject.toml        # Python project configuration
 ```
 
----
+## Các module chính
 
-## Layered Architecture
+### API Endpoints (`app/api/v1/`)
+Chứa tất cả routes của ứng dụng, được nhóm theo chức năng:
+- **auth.py** - Đăng ký, đăng nhập, refresh token
+- **user_profiles.py** - Quản lý thông tin cá nhân người dùng
+- **meal_logs.py** - Ghi nhật ký bữa ăn
+- **food_nutrition.py** - Tra cứu thông tin dinh dưỡng thực phẩm
+- **nutrition_goals.py** - Thiết lập mục tiêu dinh dưỡng
+- **workout_plans.py** - Kế hoạch tập luyện
+- **progress_logs.py** - Theo dõi tiến độ
+- **dashboard.py** - Dữ liệu tổng quan dashboard
+- **uploads.py** - Upload và quản lý ảnh
+- **ai_*.py** - Các endpoint AI (recommendations, meal analysis, chatbot)
 
-```
- Request
-   ↓
-┌─────────────────────┐
-│  API Router         │  Nhận request, validate nhanh, gọi service
-│  (app/api/v1/*.py)  │  Không chứa logic nghiệp vụ
-└──────────┬──────────┘
-           ↓
-┌─────────────────────┐
-│  Service Layer      │  Xử lý nghiệp vụ, gọi DB/SQLAlchemy,
-│  (app/services/*)   │  gọi AI, trả về domain objects
-└──────────┬──────────┘
-           ↓
-┌─────────────────────┐
-│  Model / Schema     │  SQLAlchemy Models ↔ Pydantic Schemas
-│  (app/models/*)     │  Định nghĩa cấu trúc dữ liệu
-│  (app/schemas/*)    │
-└─────────────────────┘
-```
+### Models (`app/models/`)
+Định nghĩa cấu trúc các bảng trong database:
+- User, UserProfile - Thông tin người dùng
+- MealLog, FoodNutrition - Nhật ký ăn uống
+- NutritionGoal - Mục tiêu dinh dưỡng
+- WorkoutPlan, WorkoutSession - Kế hoạch tập luyện
+- ProgressLog - Nhật ký tiến độ
+- Chat, Message, AIMessage - Dữ liệu chatbot
+- DailyRecommendation - Đề xuất hàng ngày
+- UploadedImage - Metadata ảnh upload
 
----
+### Services (`app/services/`)
+Chứa logic nghiệp vụ, tách biệt khỏi API routes:
+- meal_service.py - Xử lý nghiệp vụ liên quan đến bữa ăn
+- nutrition_service.py - Tính toán và quản lý dinh dưỡng
+- workout_service.py - Quản lý bài tập
+- dashboard_service.py - Tổng hợp dữ liệu dashboard
+- image_storage_service.py - Lưu trữ và quản lý ảnh upload
+- image_cleanup_scheduler.py - Scheduler tự động xóa ảnh hết hạn
 
-## Environment Variables
+### AI Integration (`app/ai/`)
+- **providers/** - Triển khai cụ thể cho từng AI provider (Gemini, Groq)
+- **factory.py** - Factory pattern để chọn provider phù hợp
+- **prompts/** - Các prompt templates cho AI
 
-Sao chép `.env.example` → `.env`:
+### Chatbot (`app/chatbot/`)
+Hệ thống chatbot AI thông minh:
+- Xây dựng context từ lịch sử trò chuyện và dữ liệu người dùng
+- Áp dụng policies để đảm bảo câu trả lời chính xác
+- Tích hợp với meal logging và recommendations
 
-| Biến | Mô tả | Bắt buộc |
-|-------|--------|-----------|
-| `ENVIRONMENT` | `development` / `production` | ✅ |
-| `SECRET_KEY` | Secret key cho JWT (dài, ngẫu nhiên) | ✅ |
-| `POSTGRES_USER` | PostgreSQL username | ✅ |
-| `POSTGRES_PASSWORD` | PostgreSQL password | ✅ |
-| `POSTGRES_HOST` | PostgreSQL host | ✅ |
-| `POSTGRES_PORT` | PostgreSQL port | ✅ |
-| `POSTGRES_DB` | Database name | ✅ |
-| `DATABASE_URL` | Full connection string (`postgresql://...`) | ✅ |
-| `BACKEND_CORS_ORIGINS` | JSON array origins (VD: `["http://localhost:3000"]`) | ✅ |
-| `AI_CHAT_PROVIDER` | `gemini` hoặc `groq` | ✅ |
-| `AI_PLANNER_PROVIDER` | `gemini` hoặc `groq` | ✅ |
-| `AI_MEAL_PROVIDER` | `gemini` hoặc `groq` | ✅ |
-| `GEMINI_API_KEY` | Google Gemini API key | ✅ (nếu dùng Gemini) |
-| `GEMINI_MODEL` | Tên model Gemini (mặc định: `gemini-2.5-flash`) | ✅ |
-| `GROQ_API_KEY` | Groq API key | ✅ (nếu dùng Groq) |
-| `GROQ_TEXT_MODEL` | Model text Groq (mặc định: `llama-3.3-70b-versatile`) | ✅ |
-| `GROQ_VISION_MODEL` | Model vision Groq | ✅ |
-| `USDA_API_KEY` | USDA FoodData Central API key (tùy chọn) | ❌ |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | Thời gian hết hạn JWT (mặc định: 30 phút) | ❌ |
-
----
-
-## Các lệnh Makefile
+## Cách chạy
 
 ```bash
-cd apps/api
+# Cài đặt dependencies
+pip install -r requirements.txt
 
-make install     # pip install -r requirements.txt
-make dev         # uvicorn app.main:app --reload
-make migrate     # alembic upgrade head
-make test        # pytest
-make lint        # ruff check app tests
-```
+# Chạy server (development)
+uvicorn app.main:app --reload --port 8000
 
----
-
-## Database Migrations
-
-```bash
-# Tạo migration mới
-alembic revision --autogenerate -m "description"
-
-# Chạy migration lên head
+# Chạy migrations
 alembic upgrade head
 
-# Rollback 1 migration
-alembic downgrade -1
-
-# Xem lịch sử migration
-alembic history
+# Chạy tests
+pytest tests/
 ```
 
----
+## API Documentation
 
-## API Prefix & Versioning
+Khi server đang chạy, truy cập:
+- **Swagger UI**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc
 
-Tất cả endpoints đều có prefix `/api/v1`. Cấu trúc URL:
+## Database Models
 
-```
-/api/v1/auth/register
-/api/v1/auth/login
-/api/v1/user-profiles
-/api/v1/nutrition-goals
-/api/v1/nutrition-goals/calculate
-/api/v1/nutrition-goals/active
-/api/v1/food-nutrition
-/api/v1/food-nutrition/search
-/api/v1/food-nutrition/{food_id}
-/api/v1/meal-logs
-/api/v1/meal-logs/{meal_id}
-/api/v1/dashboard/today
-/api/v1/dashboard/weekly
-/api/v1/progress-logs
-/api/v1/workout-plans
-/api/v1/ai/meal-update/preview
-/api/v1/ai/meal-update/confirm
-/api/v1/ai/daily-planner/generate
-/api/v1/ai/daily-planner/date/{date}
-/api/v1/ai/chat/sessions
-/api/v1/ai/chat/sessions/{session_id}/messages
-```
+Hệ thống có **16 bảng** trong database, được quản lý qua Alembic migrations:
+- users, user_profiles
+- meal_logs, food_nutritions
+- nutrition_goals, daily_recommendations
+- workout_plans, workout_sessions
+- progress_logs
+- chat_sessions, chat_messages
+- ai_usage_logs
+- uploaded_images
 
----
+## Image Storage System
 
-## Authentication & Authorization
+Hệ thống quản lý ảnh upload với metadata trong database và file trên disk.
 
-- **JWT Bearer Token** — access token trong header `Authorization: Bearer <token>`
-- **bcrypt** — password hashing (passlib)
-- **`get_current_user`** (deps.py) — lấy user từ token, dùng làm `Depends()` trong route
-- **`ensure_user_access`** (deps.py) — kiểm tra user hiện tại có quyền truy cập data của user_id khác (admin bypass)
-- **Login rate limiting** — theo dõi số lần thử đăng nhập, khóa tài khoản tạm thời
-
----
-
-## AI Integration
-
-### Provider Abstraction
-
-```python
-# app/ai/base.py
-class AIProvider(ABC):
-    async def generate_text(self, prompt: str, ...) -> str: ...
-    async def generate_json(self, prompt: str, response_schema: type, ...) -> Any: ...
-    async def analyze_image_json(self, image_bytes: bytes, prompt: str, ...) -> Any: ...
-```
-
-### Factory (chọn provider theo env)
-
-```python
-# app/ai/factory.py
-provider = get_ai_provider("chat")  # → Groq hoặc Gemini
-provider = get_ai_provider("meal")   # → Gemini hoặc Groq
-```
-
-### Synchronous AI calls in async context
-
-Gemini/Groq SDK là sync. Để tránh block event loop, dùng `run_in_threadpool`:
-
-```python
-from fastapi.concurrency import run_in_threadpool
-result = await run_in_threadpool(provider.generate_json, ...)
-```
-
----
-
-## Key Business Logic
-
-### Nutrition Calculation (Mifflin-St Jeor)
+### Storage Architecture
 
 ```
-BMR (nam) = (10 × cân nặng_kg) + (6.25 × chiều cao_cm) − (5 × tuổi) + 5
-BMR (nữ) = (10 × cân nặng_kg) + (6.25 × chiều cao_cm) − (5 × tuổi) − 161
-TDEE = BMR × ActivityMultiplier
-Daily Calorie Target = TDEE × GoalModifier
+DB: uploaded_images (metadata only)
+Disk: uploads/{user_id}/{image_type}/{image_id}.{ext}
+URL:  /uploads/{user_id}/{image_type}/{image_id}.{ext}
 ```
 
-### Meal Logging
+### Image Types & Retention
 
-1. Tạo `Meal` record với `meal_time`, `meal_type`
-2. Batch-insert `MealItem` records (cascade nếu meal bị xóa)
-3. Mỗi item ghi rõ `food_nutrition_id`, cân nặng, và `source` (`ai_nhan_dien` / `nhap_thu_cong`)
+| Type | TTL | Auto-delete | Use case |
+|------|-----|-------------|----------|
+| `avatar` | Never (`NULL`) | No | Profile picture |
+| `meal` | 7 days | Yes | Confirmed meal photos |
+| `temporary` | 1 day | Yes | Preview during AI analysis |
+| `progress` | Never (`NULL`) | No | Progress tracking photos |
 
-### Workout Plan Constraint
-
-- Chỉ **1 active plan** per user tại mỗi thời điểm
-- Khi tạo plan mới → deactivate plan cũ
-
-### AI Meal Update Flow
+### Image Lifecycle (Meal Upload)
 
 ```
-1. POST /ai/meal-update/preview
-   → Validate ảnh (JPEG/PNG/WEBP, max ~10MB)
-   → Gọi AI Vision (Gemini) → JSON {items[], overall_confidence}
-   → Map food_name → food_nutrition_id (fuzzy match)
-   → Trả về MealUpdatePreviewResponse
-
-2. POST /ai/meal-update/confirm
-   → Validate preview data
-   → Tạo MealLog + MealItems (source='ai_nhan_dien')
-   → Ghi AI log (latency, raw_response, status)
-   → Trả về meal_log_id
+1. User uploads photo → saved as temporary (1-day TTL)
+2. AI analyzes image → returns preview with uploaded_image_id + image_url
+3. User confirms meal → uploaded_image_id links image to meal_log
+4. Image type promoted: temporary → meal (7-day TTL)
+5. Cleanup job (daily at 02:00 UTC) removes expired images
 ```
 
----
+### Configuration
 
-## Testing
+```env
+UPLOAD_DIR=uploads
+MAX_IMAGE_SIZE_BYTES=5242880        # 5 MB
+IMAGE_PUBLIC_BASE_URL=/uploads
+IMAGE_RETENTION_DAYS_MEAL=7
+IMAGE_RETENTION_DAYS_TEMPORARY=1
+IMAGE_RETENTION_DAYS_PROGRESS=90    # NULL = never auto-delete
+```
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/uploads` | Upload image |
+| `GET` | `/api/v1/uploads` | List user's images |
+| `GET` | `/api/v1/uploads/{id}` | Get image metadata |
+| `DELETE` | `/api/v1/uploads/{id}` | Delete image (soft delete) |
+| `GET` | `/uploads/{path}` | Serve uploaded files |
+
+### Running Cleanup Manually
 
 ```bash
-make test
-# 18 passed, 12 skipped
+# Via script (cron-friendly)
+python -m app.scripts.cleanup_expired_images
 
-# Chạy file cụ thể
-pytest tests/test_auth.py -v
+# Scheduler runs automatically at 02:00 UTC daily (APScheduler)
 ```
 
-Test coverage chính:
-- Auth: đăng ký, đăng nhập, JWT, login rate limiting
-- Profile: CRUD, validation ngày sinh
-- Nutrition: tính BMR/TDEE, đặt goal
-- Meals: tạo meal + items, validation
-- Food Nutrition: phân quyền admin vs user
+## Bảo mật
+
+- Mật khẩu được hash bằng bcrypt
+- JWT tokens cho xác thực API
+- Role-based access control (user, admin)
+- CORS configuration cho frontend
