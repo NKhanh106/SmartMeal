@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/contexts/auth-context";
 import { useToast } from "@/hooks/use-toast";
 import { ApiError } from "@/lib/api-client";
@@ -20,11 +21,28 @@ import { Label } from "@/components/ui/label";
 export default function LoginPage() {
   const { login } = useAuth();
   const { toast } = useToast();
+  const searchParams = useSearchParams();
+  const router = useRouter();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Show session-expired message when redirected from 401
+  useEffect(() => {
+    const reason = searchParams.get("reason");
+    if (reason === "session_expired") {
+      setError("Your session has expired. Please sign in again.");
+      toast({
+        title: "Session expired",
+        description: "Your session has expired. Please sign in again.",
+        variant: "destructive",
+      });
+      // Clean the URL without reloading
+      router.replace("/login");
+    }
+  }, [searchParams, toast, router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

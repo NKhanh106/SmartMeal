@@ -80,10 +80,23 @@ class Settings(BaseSettings):
                     "SECRET_KEY must be set to a secure value in production. "
                     "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(64))\""
                 )
+            if len(self.SECRET_KEY) < 32:
+                raise ValueError(
+                    "SECRET_KEY must be at least 32 characters long in production. "
+                    "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(64))\""
+                )
             if not self.DATABASE_URL and self.POSTGRES_PASSWORD == "postgres":
                 raise ValueError(
                     "POSTGRES_PASSWORD or DATABASE_URL must be configured outside development."
                 )
+            # CORS: reject wildcard origins when allow_credentials=True
+            if self.BACKEND_CORS_ORIGINS:
+                for origin in self.BACKEND_CORS_ORIGINS:
+                    if str(origin).strip() == "*":
+                        raise ValueError(
+                            "CORS origins cannot be '*' when allow_credentials=True in production. "
+                            "Specify exact allowed origins."
+                        )
         elif env in {"development", "dev"}:
             if self.SECRET_KEY == "dev-only-change-me":
                 import logging

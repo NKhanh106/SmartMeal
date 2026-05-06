@@ -161,12 +161,42 @@ apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   return config;
 });
 
-// Clear token on 401 and re-throw as ApiError
+// Clear token on 401 and attempt refresh; re-throw as ApiError
 apiClient.interceptors.response.use(
   (response) => response,
-  (error: AxiosError<ApiErrorResponse>) => {
-    if (error.response?.status === 401 && typeof window !== "undefined") {
-      localStorage.removeItem(TOKEN_KEY);
+  async (error: AxiosError<ApiErrorResponse>) => {
+    const originalRequest = error.config as (import("axios").InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
+    if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
+      originalRequest._retry = true;
+      const refreshToken = typeof window !== "undefined" ? localStorage.getItem("smartmeal_refresh_token") : null;
+      if (refreshToken) {
+        try {
+          const { data } = await apiClient.post<{ access_token: string; expires_in?: number }>(
+            "/api/v1/auth/refresh",
+            { refresh_token: refreshToken }
+          );
+          localStorage.setItem(TOKEN_KEY, data.access_token);
+          if (typeof window !== "undefined") {
+            document.cookie = `access_token=${data.access_token}; path=/; max-age=${data.expires_in ?? 86400}; SameSite=Lax`;
+          }
+          originalRequest.headers.Authorization = `Bearer ${data.access_token}`;
+          return apiClient(originalRequest);
+        } catch {
+          // Refresh failed — clear tokens and redirect
+          localStorage.removeItem(TOKEN_KEY);
+          localStorage.removeItem("smartmeal_refresh_token");
+          if (typeof window !== "undefined") {
+            document.cookie = "access_token=; path=/; max-age=0";
+            if (!window.location.pathname.includes("/login")) {
+              window.location.href = "/login?reason=session_expired";
+            }
+          }
+        }
+      }
+      if (typeof window !== "undefined" && !window.location.pathname.includes("/login")) {
+        localStorage.removeItem(TOKEN_KEY);
+        window.location.href = "/login?reason=session_expired";
+      }
     }
     return Promise.reject(ApiError.fromAxiosError(error));
   }

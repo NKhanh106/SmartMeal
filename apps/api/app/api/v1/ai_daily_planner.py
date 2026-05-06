@@ -2,10 +2,11 @@ from datetime import date
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import ensure_user_access, get_current_user
+from app.core.rate_limiter import limiter
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.daily_recommendation import (
@@ -21,9 +22,11 @@ router = APIRouter(prefix="/ai/daily-planner", tags=["AI Daily Planner"])
 
 
 @router.post("/generate/{user_id}", response_model=GenerateDailyPlannerResponse)
+@limiter.limit("5/minute")
 async def generate_daily_planner_for_user(
     user_id: UUID,
     target_date: Optional[date] = Query(default=None),
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -37,8 +40,10 @@ async def generate_daily_planner_for_user(
 
 
 @router.post("/generate", response_model=GenerateDailyPlannerResponse)
+@limiter.limit("5/minute")
 async def generate_my_daily_planner(
     target_date: Optional[date] = Query(default=None),
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

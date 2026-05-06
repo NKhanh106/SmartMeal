@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.config import settings
-from app.core.security import create_access_token, get_password_hash, verify_password
+from app.core.security import create_access_token, create_refresh_token, get_password_hash, verify_password
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.token import Token
@@ -57,6 +57,7 @@ async def login_access_token(
     expires_delta = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     return {
         "access_token": create_access_token(user.id, expires_delta=expires_delta),
+        "refresh_token": create_refresh_token(str(user.id)),
         "token_type": "bearer",
         "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     }
@@ -100,3 +101,56 @@ async def get_current_user_info(
     current_user: User = Depends(get_current_user),
 ):
     return current_user
+
+
+@router.post("/refresh")
+async def refresh_access_token(
+    refresh_token: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Exchange a valid refresh token for a new access token.
+    Refresh token rotation: a used refresh token is immediately invalidated
+    to prevent replay attacks.
+    """
+    from jose import JWTError as JoseJWTError
+
+    try:
+        payload = jwt.decode(
+            refresh_token,
+            settings.SECRET_KEY,
+            algorithms=[ALGORITHM],
+        )
+        if payload.get("type") != "refresh":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token type.",
+            )
+        user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token payload.",
+            )
+    except JoseJWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token.",
+        )
+
+    # Verify user still exists and is active
+    result = await db.execute(select(User).where(User.id == UUID(user_id)))
+    user = result.scalar_one_or_none()
+    if not user or not user.is_active or user.deleted_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found or inactive.",
+        )
+
+    expires_delta = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    new_access_token = create_access_token(user.id, expires_delta=expires_delta)
+    return {
+        "access_token": new_access_token,
+        "token_type": "bearer",
+        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    }

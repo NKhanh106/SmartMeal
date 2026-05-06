@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +11,7 @@ from app.chatbot.service import (
     list_chat_sessions,
     send_chat_message,
 )
+from app.core.rate_limiter import limiter
 from app.db.session import get_db
 from app.models.chat import ChatSession
 from app.models.user import User
@@ -70,9 +71,11 @@ async def get_session_messages(
 
 
 @router.post("/sessions/{session_id}/messages", response_model=ChatSendMessageResponse)
+@limiter.limit("20/minute")
 async def send_message(
     session_id: UUID,
     payload: ChatMessageCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

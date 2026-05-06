@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Camera, CheckCircle2, Loader2, Sparkles, AlertCircle, X } from "lucide-react";
 import { mealService } from "@/services/meal.service";
+import imageCompression from "browser-image-compression";
 import type {
   MealUpdatePreviewResponse,
   MealUpdatePreviewItem,
@@ -74,6 +75,28 @@ function validateFile(file: File | null): string | null {
     return `File too large. Maximum size is ${MAX_FILE_SIZE_MB} MB.`;
   }
   return null;
+}
+
+async function compressImage(file: File): Promise<File> {
+  // Only compress if > 500KB (avoid recompressing already-small images)
+  if (file.size <= 500 * 1024) {
+    return file;
+  }
+  try {
+    const compressed = await imageCompression(file, {
+      maxSizeMB: 1,
+      maxWidthOrHeight: 1024,
+      useWebWorker: true,
+      fileType: "image/jpeg",
+    });
+    console.log(
+      `[SmartMeal] Compressed: ${(file.size / 1024 / 1024).toFixed(2)} MB → ${(compressed.size / 1024 / 1024).toFixed(2)} MB`
+    );
+    return compressed;
+  } catch (err) {
+    console.warn("[SmartMeal] Image compression failed, using original:", err);
+    return file;
+  }
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -145,7 +168,9 @@ export default function UploadPage() {
     setConfirmSuccess(false);
     setSavedMealLogId(null);
     try {
-      const result = await mealService.analyzeMealImage(selectedFile, mealType);
+      // Compress image before upload to reduce bandwidth and prevent timeouts
+      const fileToUpload = await compressImage(selectedFile);
+      const result = await mealService.analyzeMealImage(fileToUpload, mealType);
       setAnalysisResult(result);
       setEditableItems(result.items.map(fileToEditableItem));
     } catch (err) {

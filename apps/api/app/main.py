@@ -4,6 +4,8 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from app.api.v1 import (
     ai_chatbot,
@@ -20,6 +22,7 @@ from app.api.v1 import (
     workout_plans,
 )
 from app.core.config import settings
+from app.core.rate_limiter import limiter
 from app.services.image_cleanup_scheduler import start_scheduler, stop_scheduler
 
 
@@ -38,6 +41,9 @@ app = FastAPI(
     description="Backend API for SmartMeal nutrition and fitness assistant - Powered by FastAPI",
     lifespan=lifespan,
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 if settings.BACKEND_CORS_ORIGINS:
     app.add_middleware(

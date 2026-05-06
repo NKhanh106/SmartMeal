@@ -1,10 +1,11 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.config import settings
+from app.core.rate_limiter import limiter
 from app.db.session import get_db
 from app.models.enums import ItemSourceType
 from app.models.user import User
@@ -84,15 +85,23 @@ def _get_effective_user_id(
 
 
 @router.post("/preview", response_model=MealUpdatePreviewResponse)
+@limiter.limit("10/minute")
 async def preview_meal_from_image(
     meal_type: str = Form(...),
     target_user_id: UUID | None = Form(default=None),
     image: UploadFile = File(...),
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     image_bytes = _validate_image(image)
     effective_user_id = _get_effective_user_id(current_user, target_user_id)
+
+    model_name = (
+        settings.GEMINI_MODEL
+        if settings.AI_MEAL_PROVIDER == "gemini"
+        else settings.GROQ_VISION_MODEL
+    )
 
     try:
         preview, raw_response, latency_ms = await _preview_meal_from_image(
@@ -104,11 +113,6 @@ async def preview_meal_from_image(
             original_filename=image.filename,
         )
     except Exception as exc:
-        model_name = (
-            settings.GEMINI_MODEL
-            if settings.AI_MEAL_PROVIDER == "gemini"
-            else settings.GROQ_VISION_MODEL
-        )
         await create_ai_log(
             db=db,
             user_id=effective_user_id,
@@ -123,16 +127,18 @@ async def preview_meal_from_image(
             latency_ms=0,
         )
         await db.commit()
+        # Return 504 for timeout, 503 for other failures
+        error_detail = str(exc)
+        if "timeout" in error_detail.lower():
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="AI service timeout. Please try again.",
+            )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="AI meal analysis failed. Please try again.",
         )
 
-    model_name = (
-        settings.GEMINI_MODEL
-        if settings.AI_MEAL_PROVIDER == "gemini"
-        else settings.GROQ_VISION_MODEL
-    )
     await create_ai_log(
         db=db,
         user_id=effective_user_id,

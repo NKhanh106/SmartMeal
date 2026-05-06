@@ -104,8 +104,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // Login
   const login = useCallback(
     async (email: string, password: string) => {
-      const { access_token } = await authService.login(email, password);
-      authService.setToken(access_token);
+      const result = await authService.login(email, password);
+      authService.setTokens(result.access_token, result.refresh_token);
+      // Set cookie for middleware auth check
+      if (typeof window !== "undefined") {
+        document.cookie = `access_token=${result.access_token}; path=/; max-age=${result.expires_in ?? 86400}; SameSite=Lax`;
+      }
       await refreshUser();
       router.replace("/dashboard");
     },
@@ -125,6 +129,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // Logout
   const logout = useCallback(() => {
     authService.logout();
+    if (typeof window !== "undefined") {
+      document.cookie = "access_token=; path=/; max-age=0";
+    }
     setUser(null);
     router.replace("/login");
   }, [router]);

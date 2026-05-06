@@ -82,21 +82,25 @@ async def create_meal_log_with_items(
     total_carb = Decimal("0")
     total_fat = Decimal("0")
 
+    # ── Batch-fetch all foods upfront to avoid N+1 queries ────────────────────
+    food_ids = [item.food_nutrition_id for item in payload.items if item.food_nutrition_id is not None]
+    food_map: dict[uuid.UUID, FoodNutrition] = {}
+    if food_ids:
+        food_result = await db.execute(
+            select(FoodNutrition).where(FoodNutrition.id.in_(food_ids))
+        )
+        food_map = {food.id: food for food in food_result.scalars().all()}
+
     for item_payload in payload.items:
-        food = None
         food_id = item_payload.food_nutrition_id
         detected_name = item_payload.detected_food_name
 
-        if food_id is not None:
-            result = await db.execute(
-                select(FoodNutrition).where(FoodNutrition.id == food_id)
+        food = food_map.get(food_id) if food_id else None
+        if food_id is not None and food is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Food nutrition not found: {food_id}",
             )
-            food = result.scalar_one_or_none()
-            if food is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Food nutrition not found: {food_id}",
-                )
 
         nutrition = calculate_item_nutrition(food, item_payload.estimated_weight_g)
 
