@@ -66,6 +66,11 @@ class MealUpdatePreviewResponse(BaseModel):
         None,
         description="Public URL to the uploaded preview image.",
     )
+    # Cache indicator — true when result was served from Redis cache
+    from_cache: bool = Field(
+        False,
+        description="True if this result was served from Redis cache (duplicate image).",
+    )
 
     model_config = ConfigDict(from_attributes=True)
 

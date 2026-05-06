@@ -5,6 +5,8 @@ export interface ChatMessage {
   role: ChatRole;
   content: string;
   timestamp: Date;
+  /** True when the message is still streaming from the SSE endpoint */
+  isStreaming?: boolean;
 }
 
 export interface ChatState {

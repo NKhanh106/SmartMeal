@@ -1,10 +1,13 @@
+import json
 import time
 from uuid import UUID
 
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.ai_logger import log_ai_call
 from app.ai.factory import get_ai_provider
+from app.core.cache import cache_get, cache_set, make_image_cache_key
 from app.core.config import settings
 from app.models.food_nutrition import FoodNutrition
 from app.schemas.meal_update import (
@@ -36,6 +39,7 @@ Nguyên tắc:
 """
 
 
+@log_ai_call(feature="food_recognition")
 async def preview_meal_from_image(
     db: AsyncSession,
     user_id: UUID,
@@ -45,17 +49,21 @@ async def preview_meal_from_image(
     original_filename: str | None = None,
 ) -> tuple[MealUpdatePreviewResponse, dict, int]:
     """
-    Multi-stage food recognition pipeline:
+    Multi-stage food recognition pipeline with Redis caching:
 
     1. Persist image to disk (image_type=temporary, 1-day TTL)
-    2. AI Vision: Call provider.analyze_image_json()
-    3. Food Mapping: Match each detected food → food_nutrition DB
-       (fuzzy matching + Vietnamese normalization)
-    4. Nutrition: Calculate macros per item weight
-    5. Return preview with image metadata (uploaded_image_id, image_url)
+    2. Check Redis cache for same image hash → return cached result if found
+    3. AI Vision: Call provider.analyze_image_json()
+    4. Cache AI raw text for 24h
+    5. Food Mapping: Match each detected food → food_nutrition DB
+    6. Nutrition: Calculate macros per item weight
+    7. Return preview with image metadata (uploaded_image_id, image_url)
 
     Returns (preview_response, raw_ai_response, latency_ms).
     """
+    import logging
+
+    logger = logging.getLogger(__name__)
 
     from fastapi import UploadFile
     from io import BytesIO
@@ -81,9 +89,7 @@ async def preview_meal_from_image(
         await db.commit()
     except Exception:
         # Image persistence failure should NOT break the preview
-        # Log and continue without image metadata
-        import logging
-        logging.getLogger(__name__).warning(
+        logger.warning(
             "Failed to persist preview image for user %s, continuing without image.", user_id
         )
 
@@ -94,17 +100,34 @@ async def preview_meal_from_image(
         '"overall_confidence": ..., "notes": "..."}'
     )
 
-    provider = get_ai_provider(settings.AI_MEAL_PROVIDER)
+    # ── Step 2: Check Redis cache (same image → same AI result) ─────────────────
+    cache_key = make_image_cache_key(image_bytes)
+    cached_raw_text = await cache_get(cache_key)
     start_time = time.perf_counter()
+    provider = get_ai_provider(settings.AI_MEAL_PROVIDER)
 
-    ai_output, raw_response = await run_in_threadpool(
-        provider.analyze_image_json,
-        image_bytes=image_bytes,
-        mime_type=mime_type,
-        prompt=user_prompt,
-        response_schema=AIMealUpdateOutput,
-        temperature=0.2,
-    )
+    if cached_raw_text is not None:
+        # Cache HIT — skip AI call, re-parse cached text
+        logger.info("Food recognition cache HIT for key %s...", cache_key[:20])
+        ai_text = cached_raw_text
+        ai_output = AIMealUpdateOutput.model_validate(json.loads(ai_text))
+        raw_response = {"provider": settings.AI_MEAL_PROVIDER, "cached": True, "text": ai_text}
+    else:
+        # Cache MISS — call AI
+        logger.info("Food recognition cache MISS for key %s...", cache_key[:20])
+        ai_output, raw_response = await run_in_threadpool(
+            provider.analyze_image_json,
+            image_bytes=image_bytes,
+            mime_type=mime_type,
+            prompt=user_prompt,
+            response_schema=AIMealUpdateOutput,
+            temperature=0.2,
+        )
+        # Cache raw text for 24h
+        if hasattr(ai_output, "model_dump"):
+            cached_value = json.dumps(ai_output.model_dump(mode="json"), ensure_ascii=False)
+            await cache_set(cache_key, cached_value, settings.FOOD_RECOGNITION_CACHE_TTL)
+            raw_response["text"] = cached_value
 
     latency_ms = int((time.perf_counter() - start_time) * 1000)
 

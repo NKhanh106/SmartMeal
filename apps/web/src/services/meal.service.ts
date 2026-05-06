@@ -92,8 +92,9 @@ export const mealService = {
     const formData = new FormData();
     formData.append("image", file);
     formData.append("meal_type", mealType);
+    // Use /recognize-image endpoint which includes Redis caching for duplicate images
     return api.uploadFile<MealUpdatePreviewResponse>(
-      `${AI_MEAL_BASE}/preview`,
+      `${AI_MEAL_BASE}/recognize-image`,
       formData
     );
   },

@@ -5,12 +5,12 @@ import { ChatBubble } from "./ChatBubble";
 import { ChatPanel } from "./ChatPanel";
 
 export function FloatingChatBot() {
-  const { isOpen, messages, inputValue, isTyping, isLoadingHistory, setInputValue, toggleChat, closeChat, sendMessage } =
+  const { isOpen, messages, inputValue, isTyping, isLoadingHistory, setInputValue, toggleChat, closeChat, sendMessageStream } =
     useChatBot();
 
   const handleSend = () => {
     if (inputValue.trim()) {
-      sendMessage(inputValue);
+      sendMessageStream(inputValue);
     }
   };
 

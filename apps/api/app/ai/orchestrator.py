@@ -7,7 +7,7 @@ retry strategies, and multi-step pipeline orchestration.
 Key principles:
 1. CONFIGURED CONFIDENCE THRESHOLDS — not arbitrary
 2. RETRY WITH EXPONENTIAL BACKOFF — transient failures recover
-3. FALLBACK CHAINS — if one provider fails, try the next
+3. CIRCUIT BREAKER — block calls when provider is continuously failing
 4. SINGLE RESPONSIBILITY — orchestrator delegates, doesn't implement
 
 Usage:
@@ -28,14 +28,19 @@ Usage:
 """
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.circuit_breaker import gemini_circuit, groq_circuit
 from app.core.config import settings
 from app.services.learning_service import get_learned_correction
+
+logger = logging.getLogger(__name__)
 
 # ─── Confidence Levels ─────────────────────────────────────────────────────────────
 
@@ -258,14 +263,56 @@ class AIOrchestrator:
         mime_type: str,
         meal_type: str,
     ):
-        """Import and call the meal preview function lazily to avoid circular imports."""
+        """Call meal preview through circuit breaker with provider fallback."""
         from app.services.ai_meal_update_service import preview_meal_from_image
-        return await preview_meal_from_image(
-            db=db,
-            user_id=user_id,
-            meal_type=meal_type,
-            image_bytes=image_bytes,
-            mime_type=mime_type,
+
+        # Select circuit based on primary provider
+        primary_circuit = gemini_circuit if self.primary_provider == "gemini" else groq_circuit
+        fallback_circuit = groq_circuit if self.primary_provider == "gemini" else gemini_circuit
+
+        # Try primary first
+        if primary_circuit.is_available():
+            try:
+                return await primary_circuit.call(
+                    preview_meal_from_image,
+                    db=db,
+                    user_id=user_id,
+                    meal_type=meal_type,
+                    image_bytes=image_bytes,
+                    mime_type=mime_type,
+                )
+            except RuntimeError:
+                # Circuit is open — fall through to fallback
+                logger.warning("Primary circuit [%s] is OPEN, trying fallback", self.primary_provider)
+            except Exception as exc:
+                logger.warning("Primary provider failed: %s", exc)
+
+        # Fallback to secondary provider
+        if fallback_circuit.is_available():
+            try:
+                logger.info("Using fallback provider for meal preview")
+                return await fallback_circuit.call(
+                    preview_meal_from_image,
+                    db=db,
+                    user_id=user_id,
+                    meal_type=meal_type,
+                    image_bytes=image_bytes,
+                    mime_type=mime_type,
+                )
+            except RuntimeError:
+                raise HTTPException(
+                    status_code=503,
+                    detail="All AI providers are temporarily unavailable. Please try again in ~60 seconds."
+                )
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"All AI providers failed: {exc}"
+                )
+
+        raise HTTPException(
+            status_code=503,
+            detail="All AI circuits are OPEN. Please try again later."
         )
 
     def _classify_confidence(self, confidence: float) -> ConfidenceLevel:

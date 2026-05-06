@@ -21,18 +21,33 @@ from app.api.v1 import (
     user_profiles,
     workout_plans,
 )
+from app.api.v1 import health as ai_health
 from app.core.config import settings
 from app.core.rate_limiter import limiter
+from app.core.cache import get_redis, cache_close
 from app.services.image_cleanup_scheduler import start_scheduler, stop_scheduler
+
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     start_scheduler()
+    # Warm up Redis connection
+    try:
+        redis = await get_redis()
+        await redis.ping()
+        logger.info("Redis connected")
+    except Exception as e:
+        logger.warning(f"Redis unavailable — running without cache: {e}")
     yield
     # Shutdown
     stop_scheduler()
+    await cache_close()
 
 
 app = FastAPI(
@@ -66,6 +81,8 @@ app.include_router(ai_daily_planner.router, prefix=settings.API_V1_STR)
 app.include_router(ai_chatbot.router, prefix=settings.API_V1_STR)
 app.include_router(ai_meal_update.router, prefix=settings.API_V1_STR)
 app.include_router(uploads.router, prefix=settings.API_V1_STR)
+# Health check endpoint (no auth required, registered at root level)
+app.include_router(ai_health.router)
 
 # ── Static files for uploaded images ─────────────────────────────────────────
 _upload_dir = Path(settings.UPLOAD_DIR).resolve()

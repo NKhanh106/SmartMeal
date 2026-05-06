@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.rate_limiter import limiter
+from app.core.cache import cache_get, cache_set, make_image_cache_key
 from app.db.session import get_db
 from app.models.enums import ItemSourceType
 from app.models.user import User
@@ -82,6 +83,99 @@ def _get_effective_user_id(
     if current_user.role == "admin" and target_user_id is not None:
         return target_user_id
     return current_user.id
+
+
+@router.post("/recognize-image", response_model=MealUpdatePreviewResponse)
+@limiter.limit("10/minute")
+async def recognize_meal_image(
+    request: Request,
+    meal_type: str = Form(...),
+    target_user_id: UUID | None = Form(default=None),
+    image: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Dedicated food recognition endpoint with Redis caching.
+    Returns AI-detected dishes with cached result for duplicate images.
+    """
+    import json
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    image_bytes = _validate_image(image)
+    effective_user_id = _get_effective_user_id(current_user, target_user_id)
+
+    # Check cache first using image SHA256 hash
+    cache_key = make_image_cache_key(image_bytes)
+    cached_result = await cache_get(cache_key)
+    if cached_result is not None:
+        logger.info("Food recognition cache HIT")
+        cached_preview = MealUpdatePreviewResponse.model_validate(cached_result)
+        cached_preview.from_cache = True
+        return cached_preview
+
+    logger.info("Food recognition cache MISS")
+    model_name = (
+        settings.GEMINI_MODEL
+        if settings.AI_MEAL_PROVIDER == "gemini"
+        else settings.GROQ_VISION_MODEL
+    )
+
+    try:
+        preview, raw_response, latency_ms = await _preview_meal_from_image(
+            db=db,
+            user_id=effective_user_id,
+            meal_type=meal_type,
+            image_bytes=image_bytes,
+            mime_type=image.content_type,
+            original_filename=image.filename,
+        )
+    except Exception as exc:
+        await create_ai_log(
+            db=db,
+            user_id=effective_user_id,
+            task_type="meal_image_analysis",
+            provider_name=settings.AI_MEAL_PROVIDER,
+            model_name=model_name,
+            prompt_version=MEAL_UPDATE_PROMPT_VERSION,
+            input_summary=f"provider={settings.AI_MEAL_PROVIDER}, meal_type={meal_type}",
+            raw_response=None,
+            status="failed",
+            error_message=str(exc),
+            latency_ms=0,
+        )
+        await db.commit()
+        error_detail = str(exc)
+        if "timeout" in error_detail.lower():
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="AI service timeout. Please try again.",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI meal analysis failed. Please try again.",
+        )
+
+    await create_ai_log(
+        db=db,
+        user_id=effective_user_id,
+        task_type="meal_image_analysis",
+        provider_name=settings.AI_MEAL_PROVIDER,
+        model_name=model_name,
+        prompt_version=MEAL_UPDATE_PROMPT_VERSION,
+        input_summary=f"provider={settings.AI_MEAL_PROVIDER}, meal_type={meal_type}",
+        raw_response=raw_response,
+        status="success",
+        latency_ms=latency_ms,
+    )
+    await db.commit()
+
+    # Cache result for 24h
+    await cache_set(cache_key, preview.model_dump(mode="json"), settings.FOOD_RECOGNITION_CACHE_TTL)
+
+    return preview
 
 
 @router.post("/preview", response_model=MealUpdatePreviewResponse)
@@ -246,6 +340,12 @@ async def confirm_meal_from_preview(
 
     await db.commit()
     await db.refresh(meal_log)
+
+    # ── Invalidate daily plan cache ─────────────────────────────────────────────
+    # When user logs a meal, the daily plan should be regenerated
+    from datetime import date
+    from app.services.daily_recommendation_service import invalidate_user_plan_cache
+    await invalidate_user_plan_cache(current_user.id, date.today())
 
     return MealUpdateConfirmResponse(
         meal_log_id=meal_log.id,

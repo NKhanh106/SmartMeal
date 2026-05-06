@@ -44,6 +44,9 @@ export function ChatMessage({ message }: ChatMessageProps) {
         )}
       >
         <p className="whitespace-pre-wrap break-words">{message.content}</p>
+        {message.isStreaming && !isUser && (
+          <span className="inline-block w-2 h-3.5 bg-slate-400 animate-pulse ml-0.5 mt-0.5 rounded-sm align-middle" />
+        )}
         <div
           className={cn(
             "text-[10px] mt-1.5 opacity-50 font-bold uppercase",

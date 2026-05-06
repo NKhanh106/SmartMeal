@@ -66,6 +66,13 @@ class Settings(BaseSettings):
     MAX_IMAGE_SIZE_BYTES: int = 5 * 1024 * 1024  # 5 MB
     IMAGE_PUBLIC_BASE_URL: str = "/uploads"
 
+    # ── Redis Cache Settings ──────────────────────────────────────────────────────
+    REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_MAX_CONNECTIONS: int = 20
+    AI_CACHE_TTL_SECONDS: int = 3600          # Cache AI result 1 hour
+    FOOD_RECOGNITION_CACHE_TTL: int = 86400   # Cache food recognition 24 hours
+    DAILY_PLAN_CACHE_TTL: int = 43200         # Cache daily plan 12 hours
+
     # Retention (days), NULL = never auto-delete
     IMAGE_RETENTION_DAYS_MEAL: int | None = 7
     IMAGE_RETENTION_DAYS_TEMPORARY: int | None = 1

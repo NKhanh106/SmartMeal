@@ -14,6 +14,8 @@ from app.ai.prompts.daily_planner_prompt import (
     DAILY_PLANNER_SYSTEM_PROMPT,
     build_daily_planner_user_prompt,
 )
+from app.ai.circuit_breaker import gemini_circuit, groq_circuit
+from app.core.cache import cache_get, cache_set, cache_delete, make_cache_key
 from app.core.config import settings
 from app.core.utils import (
     get_active_goal,
@@ -155,14 +157,35 @@ async def upsert_daily_recommendation(
     return rec
 
 
+async def invalidate_user_plan_cache(user_id: UUID, target_date: date) -> None:
+    """Invalidate cached daily plan when user logs a new meal."""
+    cache_key = make_cache_key("daily_plan", str(user_id), target_date.isoformat())
+    await cache_delete(cache_key)
+
+
 async def generate_daily_recommendation(
     db: AsyncSession,
     user_id: UUID,
     target_date: date | None = None,
 ) -> DailyRecommendation:
+    import logging
+
+    logger = logging.getLogger(__name__)
+
     if target_date is None:
         target_date = date.today() + timedelta(days=1)
 
+    # ── Check Redis cache ──────────────────────────────────────────────────────
+    cache_key = make_cache_key("daily_plan", str(user_id), target_date.isoformat())
+    cached_data = await cache_get(cache_key)
+    if cached_data:
+        # Return cached recommendation from DB without calling AI
+        logger.info("Daily plan cache HIT for user %s, date %s", user_id, target_date)
+        rec = await get_recommendation_by_date(db, user_id, target_date)
+        # Mark as cached in memory (not persisted to DB)
+        return rec
+
+    logger.info("Daily plan cache MISS for user %s, date %s — generating new plan", user_id, target_date)
     context = await build_daily_planner_context(
         db=db,
         user_id=user_id,
@@ -175,69 +198,74 @@ async def generate_daily_recommendation(
 
     start_time = time.perf_counter()
 
-    try:
-        # Dùng threadpool để không block event loop
-        ai_result, raw_response = await run_in_threadpool(
-            provider.generate_json,
-            system_prompt=DAILY_PLANNER_SYSTEM_PROMPT,
-            user_prompt=user_prompt,
-            response_schema=DailyPlannerAIResult,
-            temperature=0.3,
-        )
+    # ── Call AI with circuit breaker ────────────────────────────────────────
+    primary_circuit = gemini_circuit if settings.AI_PLANNER_PROVIDER == "gemini" else groq_circuit
+    fallback_circuit = groq_circuit if settings.AI_PLANNER_PROVIDER == "gemini" else gemini_circuit
 
-        latency_ms = int((time.perf_counter() - start_time) * 1000)
-        model_name = settings.GEMINI_MODEL if settings.AI_PLANNER_PROVIDER == "gemini" else settings.GROQ_TEXT_MODEL
+    ai_result = None
+    raw_response = None
+    last_error: Exception | None = None
 
-        ai_log = await create_ai_log(
-            db=db,
-            user_id=user_id,
-            task_type="daily_recommendation",
-            provider_name=settings.AI_PLANNER_PROVIDER,
-            model_name=model_name,
-            prompt_version=DAILY_PLANNER_PROMPT_VERSION,
-            input_summary=f"provider={settings.AI_PLANNER_PROVIDER}, target_date={target_date}",
-            raw_response=raw_response,
-            status="success",
-            latency_ms=latency_ms,
-        )
+    for circuit, _provider_name in [(primary_circuit, settings.AI_PLANNER_PROVIDER), (fallback_circuit, None)]:
+        if not circuit.is_available() and _provider_name is not None:
+            continue
+        try:
+            if _provider_name is None:
+                # Use fallback
+                fallback_provider_name = "gemini" if settings.AI_PLANNER_PROVIDER == "groq" else "groq"
+                logger.info("Daily planner: trying fallback provider %s", fallback_provider_name)
+                provider = get_ai_provider(fallback_provider_name)
 
-        recommendation = await upsert_daily_recommendation(
-            db=db,
-            user_id=user_id,
-            ai_result=ai_result,
-            raw_response=raw_response,
-            ai_analysis_log_id=ai_log.id,
-        )
-        await db.commit()
-        await db.refresh(recommendation)
+            ai_result, raw_response = await run_in_threadpool(
+                provider.generate_json,
+                system_prompt=DAILY_PLANNER_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                response_schema=DailyPlannerAIResult,
+                temperature=0.3,
+            )
+            break
+        except Exception as exc:
+            last_error = exc
+            logger.warning("Daily planner AI call failed: %s", exc)
+            continue
 
-        return recommendation
-
-    except Exception as exc:
+    if ai_result is None:
         await db.rollback()
-
-        latency_ms = int((time.perf_counter() - start_time) * 1000)
-        model_name = settings.GEMINI_MODEL if settings.AI_PLANNER_PROVIDER == "gemini" else settings.GROQ_TEXT_MODEL
-
-        await create_ai_log(
-            db=db,
-            user_id=user_id,
-            task_type="daily_recommendation",
-            provider_name=settings.AI_PLANNER_PROVIDER,
-            model_name=model_name,
-            prompt_version=DAILY_PLANNER_PROMPT_VERSION,
-            input_summary=f"provider={settings.AI_PLANNER_PROVIDER}, target_date={target_date}",
-            raw_response=None,
-            status="failed",
-            error_message=str(exc),
-            latency_ms=latency_ms,
-        )
-        await db.commit()
-
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Hệ thống AI hiện đang bận, không thể lên kế hoạch. Vui lòng thử lại sau.",
         )
+
+    latency_ms = int((time.perf_counter() - start_time) * 1000)
+    model_name = settings.GEMINI_MODEL if settings.AI_PLANNER_PROVIDER == "gemini" else settings.GROQ_TEXT_MODEL
+
+    ai_log = await create_ai_log(
+        db=db,
+        user_id=user_id,
+        task_type="daily_recommendation",
+        provider_name=settings.AI_PLANNER_PROVIDER,
+        model_name=model_name,
+        prompt_version=DAILY_PLANNER_PROMPT_VERSION,
+        input_summary=f"provider={settings.AI_PLANNER_PROVIDER}, target_date={target_date}",
+        raw_response=raw_response,
+        status="success",
+        latency_ms=latency_ms,
+    )
+
+    recommendation = await upsert_daily_recommendation(
+        db=db,
+        user_id=user_id,
+        ai_result=ai_result,
+        raw_response=raw_response,
+        ai_analysis_log_id=ai_log.id,
+    )
+    await db.commit()
+    await db.refresh(recommendation)
+
+    # Cache for 12 hours
+    await cache_set(cache_key, {"id": str(recommendation.id)}, settings.DAILY_PLAN_CACHE_TTL)
+
+    return recommendation
 
 
 async def get_recommendation_by_date(
