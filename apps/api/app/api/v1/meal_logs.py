@@ -1,17 +1,19 @@
 from uuid import UUID
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import select, and_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import ensure_user_access, get_current_user
 from app.db.session import get_db
+from app.models.enums import MealLogSourceType
 from app.models.meal import MealLog
 from app.models.user import User
 from app.schemas.meal import MealLogCreate, MealLogResponse, MealLogSummaryResponse
-from app.services.meal_service import create_meal_log_with_items
+from app.services.meal_service import create_meal_log_with_items, recalculate_meal_totals
 
 router = APIRouter(prefix="/meal-logs", tags=["Meal Logs"])
 
@@ -99,6 +101,7 @@ async def _list_meal_logs(
 ) -> list[MealLog]:
     result = await db.execute(
         select(MealLog)
+        .options(selectinload(MealLog.items))
         .where(MealLog.user_id == user_id)
         .order_by(MealLog.meal_time.desc())
         .offset(offset)
@@ -120,3 +123,49 @@ async def _get_meal_log_or_404(db: AsyncSession, meal_log_id: UUID) -> MealLog:
             detail="Meal log not found.",
         )
     return meal_log
+
+
+@router.get("/extracted-today", response_model=list[MealLogSummaryResponse])
+async def get_extracted_meals_today(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get meals that were auto-extracted from chat today."""
+    from datetime import datetime, timezone
+
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    result = await db.execute(
+        select(MealLog)
+        .where(
+            MealLog.user_id == current_user.id,
+            MealLog.created_at >= today_start,
+            MealLog.source.in_([
+                MealLogSourceType.chat_extraction,
+                MealLogSourceType.chat_command,
+            ])
+        )
+        .order_by(MealLog.meal_time.desc())
+    )
+    return list(result.scalars().all())
+
+
+@router.post("/{meal_log_id}/recalculate", response_model=MealLogResponse)
+async def recalculate_meal_log_totals(
+    meal_log_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Recalculate nutrition totals for a meal log after items are edited.
+    Must be called after editing any MealItem within a MealLog.
+    """
+    meal_log = await _get_meal_log_or_404(db, meal_log_id)
+    if meal_log.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to update this meal log.",
+        )
+
+    updated = await recalculate_meal_totals(db, meal_log_id)
+    return updated

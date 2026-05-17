@@ -1,10 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AlertCircle, Loader2, Plus, Flame, Target, Utensils, Clock } from "lucide-react";
@@ -21,9 +23,7 @@ import {
   Cell,
 } from "recharts";
 import { useAuth } from "@/contexts/auth-context";
-import { analyticsService } from "@/services/analytics.service";
-import { nutritionGoalService } from "@/services/nutrition-goal.service";
-import type { DailyDashboardResponse, WeeklyDashboardResponse, NutritionGoalResponse } from "@/lib/types/api";
+import { useDashboardData } from "@/hooks/use-dashboard-queries";
 import { cn } from "@/lib/utils";
 
 function MealTypeLabel({ mealType }: { mealType: string }) {
@@ -156,85 +156,53 @@ function MacroCard({
 export default function DashboardPage() {
   const { user } = useAuth();
   const router = useRouter();
+  const queryClient = useQueryClient();
 
-  const [daily, setDaily] = useState<DailyDashboardResponse | null>(null);
-  const [weekly, setWeekly] = useState<WeeklyDashboardResponse | null>(null);
-  const [activeGoal, setActiveGoal] = useState<NutritionGoalResponse | null>(null);
+  // React Query — all three fetch in parallel, each with independent loading/error state
+  const { daily, weekly, goal } = useDashboardData();
 
-  const [loadingDaily, setLoadingDaily] = useState(true);
-  const [loadingWeekly, setLoadingWeekly] = useState(true);
-  const [loadingGoal, setLoadingGoal] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const isLoading = daily.isLoading || weekly.isLoading || goal.isLoading;
+  const error = daily.error || weekly.error ? "Failed to load some dashboard data." : null;
 
-  const isLoading = loadingDaily || loadingWeekly || loadingGoal;
+  // Build chart data from weekly — memoized to avoid recalculating on every render
+  const chartData = useMemo(
+    () =>
+      weekly.data?.daily_items.map((item) => {
+        const date = new Date(item.date);
+        const dayName = date.toLocaleDateString("en-US", { weekday: "short" });
+        return {
+          day: dayName,
+          calories: item.total_calories,
+        };
+      }) ?? [],
+    [weekly.data],
+  );
 
-  const fetchData = useCallback(async () => {
-    setError(null);
+  // Macro pie data — memoized, only recalculates when daily data changes
+  const macroPieData = useMemo(
+    () =>
+      daily.data
+        ? [
+            { name: "Protein", value: daily.data.total_protein_g, color: "#3b82f6" },
+            { name: "Carbs", value: daily.data.total_carb_g, color: "#10b981" },
+            { name: "Fat", value: daily.data.total_fat_g, color: "#f59e0b" },
+          ]
+        : [],
+    [daily.data],
+  );
 
-    // Daily dashboard
-    setLoadingDaily(true);
-    try {
-      const d = await analyticsService.getDailyDashboard();
-      setDaily(d);
-    } catch (e) {
-      console.error("Failed to fetch daily dashboard:", e);
-    } finally {
-      setLoadingDaily(false);
-    }
+  // Targets from active goal or daily response — memoized
+  const { calorieTarget, proteinTarget, carbTarget, fatTarget } = useMemo(
+    () => ({
+      calorieTarget: goal.data?.daily_calorie_target ?? daily.data?.active_goal?.daily_calorie_target,
+      proteinTarget: goal.data?.protein_target_g ?? daily.data?.active_goal?.protein_target_g,
+      carbTarget: goal.data?.carb_target_g ?? daily.data?.active_goal?.carb_target_g,
+      fatTarget: goal.data?.fat_target_g ?? daily.data?.active_goal?.fat_target_g,
+    }),
+    [goal.data, daily.data],
+  );
 
-    // Weekly dashboard
-    setLoadingWeekly(true);
-    try {
-      const w = await analyticsService.getWeeklyDashboard();
-      setWeekly(w);
-    } catch (e) {
-      console.error("Failed to fetch weekly dashboard:", e);
-    } finally {
-      setLoadingWeekly(false);
-    }
-
-    // Active nutrition goal
-    setLoadingGoal(true);
-    try {
-      const g = await nutritionGoalService.getActiveGoal();
-      setActiveGoal(g);
-    } catch {
-      // No active goal is OK — skip silently
-    } finally {
-      setLoadingGoal(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
-  // Build chart data from weekly
-  const chartData = weekly?.daily_items.map((item) => {
-    const date = new Date(item.date);
-    const dayName = date.toLocaleDateString("en-US", { weekday: "short" });
-    return {
-      day: dayName,
-      calories: item.total_calories,
-    };
-  }) ?? [];
-
-  // Macro pie data
-  const macroPieData = daily
-    ? [
-        { name: "Protein", value: daily.total_protein_g, color: "#3b82f6" },
-        { name: "Carbs", value: daily.total_carb_g, color: "#10b981" },
-        { name: "Fat", value: daily.total_fat_g, color: "#f59e0b" },
-      ]
-    : [];
-
-  // Targets from active goal or daily response
-  const calorieTarget = activeGoal?.daily_calorie_target ?? daily?.active_goal?.daily_calorie_target;
-  const proteinTarget = activeGoal?.protein_target_g ?? daily?.active_goal?.protein_target_g;
-  const carbTarget = activeGoal?.carb_target_g ?? daily?.active_goal?.carb_target_g;
-  const fatTarget = activeGoal?.fat_target_g ?? daily?.active_goal?.fat_target_g;
-
-  const calorieProgress = daily?.calories_progress;
+  const calorieProgress = daily.data?.calories_progress;
   const greetingName = user?.full_name ?? "User";
 
   return (
@@ -243,7 +211,7 @@ export default function DashboardPage() {
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Today&apos;s Overview</h1>
-          {loadingDaily ? (
+          {daily.isLoading ? (
             <Skeleton className="mt-1 h-4 w-64" />
           ) : calorieProgress ? (
             <p className="text-muted-foreground">
@@ -276,7 +244,7 @@ export default function DashboardPage() {
         <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">
           <AlertCircle className="h-4 w-4 shrink-0" />
           <p className="text-sm">{error}</p>
-          <Button size="sm" variant="ghost" className="ml-auto" onClick={fetchData}>
+          <Button size="sm" variant="ghost" className="ml-auto" onClick={() => queryClient.invalidateQueries({ queryKey: ["dashboard"] })}>
             Retry
           </Button>
         </div>
@@ -298,7 +266,7 @@ export default function DashboardPage() {
             </Card>
           ))}
         </div>
-      ) : !daily ? (
+      ) : !daily.data ? (
         <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 py-16 text-center">
           <Utensils className="mb-3 h-10 w-10 text-slate-300" />
           <h3 className="font-semibold text-slate-600">No meal data for today</h3>
@@ -314,7 +282,7 @@ export default function DashboardPage() {
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
           <StatCard
             title="Calories"
-            value={Math.round(daily.total_calories)}
+            value={Math.round(daily.data.total_calories)}
             unit="kcal"
             target={calorieTarget}
             targetUnit="kcal"
@@ -327,7 +295,7 @@ export default function DashboardPage() {
                     ? `${calorieProgress.remaining.toLocaleString()} kcal left`
                     : `${Math.abs(calorieProgress.remaining).toLocaleString()} kcal over`
                   : `${calorieProgress.percent ?? 0}% of goal`
-                : `${daily.meal_count} meals logged`
+                : `${daily.data.meal_count} meals logged`
             }
             trendPositive={
               calorieProgress?.remaining !== undefined
@@ -337,7 +305,7 @@ export default function DashboardPage() {
           />
           <MacroCard
             title="Protein"
-            consumed={daily.total_protein_g}
+            consumed={daily.data.total_protein_g}
             target={proteinTarget}
             unit="g"
             icon={Target}
@@ -345,7 +313,7 @@ export default function DashboardPage() {
           />
           <MacroCard
             title="Carbs"
-            consumed={daily.total_carb_g}
+            consumed={daily.data.total_carb_g}
             target={carbTarget}
             unit="g"
             icon={Utensils}
@@ -353,7 +321,7 @@ export default function DashboardPage() {
           />
           <MacroCard
             title="Fat"
-            consumed={daily.total_fat_g}
+            consumed={daily.data.total_fat_g}
             target={fatTarget}
             unit="g"
             icon={Utensils}
@@ -373,7 +341,7 @@ export default function DashboardPage() {
                 Last 7 Days
               </span>
             </div>
-            {loadingWeekly ? (
+            {weekly.isLoading ? (
               <div className="h-[300px] flex items-center justify-center">
                 <Loader2 className="h-8 w-8 animate-spin text-slate-300" />
               </div>
@@ -427,11 +395,11 @@ export default function DashboardPage() {
         <Card className="lg:col-span-3 border-slate-200/60 shadow-sm rounded-2xl">
           <CardContent className="p-8">
             <h3 className="text-lg font-bold text-slate-900 mb-8">Macro Distribution</h3>
-            {loadingDaily ? (
+            {daily.isLoading ? (
               <div className="h-[260px] flex items-center justify-center">
                 <Loader2 className="h-8 w-8 animate-spin text-slate-300" />
               </div>
-            ) : !daily || (macroPieData.every((m) => m.value === 0)) ? (
+            ) : !daily.data || (macroPieData.every((m) => m.value === 0)) ? (
               <div className="h-[260px] flex items-center justify-center">
                 <p className="text-sm text-slate-400">No macro data</p>
               </div>
@@ -460,7 +428,7 @@ export default function DashboardPage() {
                       Total
                     </span>
                     <span className="text-3xl font-extrabold text-slate-900">
-                      {Math.round(daily.total_calories).toLocaleString()}
+                      {Math.round(daily.data.total_calories).toLocaleString()}
                     </span>
                     <span className="text-[10px] font-bold text-emerald-500">kcal</span>
                   </div>
@@ -491,44 +459,62 @@ export default function DashboardPage() {
       </div>
 
       {/* Today's meals list */}
-      {daily && daily.meals && daily.meals.length > 0 && (
+      {daily.data && daily.data.meals && daily.data.meals.length > 0 && (
         <Card className="border-slate-200/60 shadow-sm rounded-2xl">
           <CardContent className="p-8">
-            <h3 className="text-lg font-bold text-slate-900 mb-6">Today&apos;s Meals</h3>
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-bold text-slate-900">Today&apos;s Meals</h3>
+              {/* Auto-detected meals notice */}
+              {daily.data.auto_detected_count !== undefined && daily.data.auto_detected_count > 0 && (
+                <span className="text-xs px-2 py-1 bg-amber-50 text-amber-700 rounded-full">
+                  {daily.data.auto_detected_count} meal(s) auto-detected from chat
+                </span>
+              )}
+            </div>
             <div className="space-y-4">
-              {daily.meals.map((meal) => (
-                <div
-                  key={meal.id}
-                  className="flex items-center justify-between rounded-xl border border-slate-100 p-4 hover:bg-slate-50 transition-colors"
-                >
-                  <div className="flex items-center gap-4">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-50">
-                      <Utensils className="h-4 w-4 text-emerald-600" />
+              {daily.data.meals.map((meal) => {
+                const isFromChat = meal.source === "chat_extraction" || meal.source === "chat_command";
+                return (
+                  <div
+                    key={meal.id}
+                    className="flex items-center justify-between rounded-xl border border-slate-100 p-4 hover:bg-slate-50 transition-colors"
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-50">
+                        <Utensils className="h-4 w-4 text-emerald-600" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <p className="font-semibold text-slate-900">
+                            <MealTypeLabel mealType={meal.meal_type} />
+                          </p>
+                          {isFromChat && (
+                            <span className="text-[10px] px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded font-medium">
+                              AI Chat
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-400">
+                          {new Date(meal.meal_time).toLocaleTimeString("en-US", {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="font-semibold text-slate-900">
-                        <MealTypeLabel mealType={meal.meal_type} />
-                      </p>
-                      <p className="text-xs text-slate-400">
-                        {new Date(meal.meal_time).toLocaleTimeString("en-US", {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </p>
+                    <div className="flex items-center gap-6 text-right">
+                      <div>
+                        <p className="text-sm font-bold text-slate-900">
+                          {Math.round(meal.total_calories)} kcal
+                        </p>
+                        <p className="text-xs text-slate-400">
+                          P: {Math.round(meal.total_protein_g)}g · C: {Math.round(meal.total_carb_g)}g · F: {Math.round(meal.total_fat_g)}g
+                        </p>
+                      </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-6 text-right">
-                    <div>
-                      <p className="text-sm font-bold text-slate-900">
-                        {Math.round(meal.total_calories)} kcal
-                      </p>
-                      <p className="text-xs text-slate-400">
-                        P: {Math.round(meal.total_protein_g)}g · C: {Math.round(meal.total_carb_g)}g · F: {Math.round(meal.total_fat_g)}g
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </CardContent>
         </Card>
@@ -536,3 +522,13 @@ export default function DashboardPage() {
     </div>
   );
 }
+
+function DashboardPageWrapper() {
+  return (
+    <ErrorBoundary>
+      <DashboardPage />
+    </ErrorBoundary>
+  );
+}
+
+export default DashboardPageWrapper;

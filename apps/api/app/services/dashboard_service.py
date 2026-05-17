@@ -5,9 +5,11 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
 
 from app.models.meal import MealLog
 from app.models.nutrition_goal import NutritionGoal
+from app.core.utils import get_active_goal as _get_active_goal
 
 
 def round_decimal(value: Decimal, places: str = "0.01") -> Decimal:
@@ -87,21 +89,9 @@ def get_day_range(
     return start_utc, end_utc
 
 
-async def get_active_goal(
-    db: AsyncSession,
-    user_id: UUID,
-):
-    """
-    Lấy mục tiêu dinh dưỡng đang active của user.
-    """
-    result = await db.execute(
-        select(NutritionGoal)
-        .filter(
-            NutritionGoal.user_id == user_id,
-            NutritionGoal.is_active.is_(True),
-        )
-    )
-    return result.scalar_one_or_none()
+# Canonical get_active_goal is imported from app.core.utils
+# This module re-exports it for backward compatibility
+get_active_goal = _get_active_goal
 
 
 def build_goal_summary(goal):
@@ -142,6 +132,7 @@ async def get_daily_dashboard(
 
     result = await db.execute(
         select(MealLog)
+        .options(selectinload(MealLog.items))
         .filter(
             MealLog.user_id == user_id,
             MealLog.meal_time >= start_utc,
@@ -171,9 +162,16 @@ async def get_daily_dashboard(
             "total_carb_g": safe_decimal(meal.total_carb_g),
             "total_fat_g": safe_decimal(meal.total_fat_g),
             "note": meal.note,
+            "source": meal.source.value if hasattr(meal.source, "value") else str(meal.source),
         }
         for meal in meals
     ]
+
+    # Count auto-detected meals (from chat)
+    auto_detected_count = sum(
+        1 for meal in meals
+        if hasattr(meal, "source") and meal.source in ("chat_extraction", "chat_command")
+    )
 
     return {
         "user_id": user_id,
@@ -203,6 +201,7 @@ async def get_daily_dashboard(
         ),
 
         "meal_count": len(meals),
+        "auto_detected_count": auto_detected_count,
         "meals": meals_response,
     }
 

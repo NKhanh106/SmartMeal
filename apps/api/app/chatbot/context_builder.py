@@ -1,11 +1,14 @@
 from datetime import date
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.chatbot.context_policy import DEFAULT_CHATBOT_CONTEXT_POLICY
+from app.core.constants import CONDITION_RULES
 from app.models.chat import ChatMessage
 from app.models.daily_recommendation import DailyRecommendation
 from app.models.meal import MealLog
@@ -29,6 +32,129 @@ def serialize_dict(obj):
     if isinstance(obj, list):
         return [serialize_dict(v) for v in obj]
     return serialize_value(obj)
+
+
+def get_dietary_rules(health_conditions: list[dict] | None) -> list[str]:
+    """
+    Return list of dietary rule flags based on active health conditions.
+    """
+    if not health_conditions:
+        return []
+
+    active = [
+        c.get("condition") for c in health_conditions
+        if isinstance(c, dict) and c.get("severity") != "resolved"
+    ]
+
+    flags: set[str] = set()
+    for cond_id in active:
+        if cond_id in CONDITION_RULES:
+            flags.update(CONDITION_RULES[cond_id])
+    return sorted(flags)
+
+
+def build_health_context(profile: UserProfile | None) -> str:
+    """
+    Returns a structured health context string injected into AI system prompt.
+    """
+    if not profile:
+        return ""
+
+    sections: list[str] = []
+
+    # Usage Goal
+    usage_goal_val = getattr(profile, "usage_goal", None)
+    if usage_goal_val:
+        goal_str = usage_goal_val.value if hasattr(usage_goal_val, "value") else str(usage_goal_val)
+        sections.append(f"User's primary goal: {goal_str}")
+
+    # Health Conditions
+    conditions = getattr(profile, "health_conditions", None)
+    if conditions:
+        active = [c for c in conditions if isinstance(c, dict) and c.get("severity") != "resolved"]
+        if active:
+            names = [c.get("condition", "") for c in active]
+            sections.append(
+                f"MEDICAL CONDITIONS (adjust all advice accordingly): {', '.join(names)}. "
+                f"Always recommend consulting a doctor for medical-related nutrition changes."
+            )
+
+            # Dietary constraints
+            rules = get_dietary_rules(conditions)
+            if rules:
+                constraint_lines = [
+                    f"- {r.replace('_', ' ').capitalize()}" for r in rules
+                ]
+                sections.append(
+                    "DIETARY CONSTRAINTS FOR THIS USER (MUST FOLLOW):\n"
+                    + "\n".join(constraint_lines)
+                )
+
+    # Allergies
+    allergies = getattr(profile, "allergies", None)
+    if allergies:
+        allergen_list = [a.get("allergen") if isinstance(a, dict) else str(a) for a in allergies]
+        sections.append(f"ALLERGIES (never suggest these foods): {', '.join(allergen_list)}")
+
+    # Dietary Restrictions
+    dietary_res = getattr(profile, "dietary_restrictions", None)
+    if dietary_res:
+        sections.append(f"Dietary restrictions: {', '.join(dietary_res)}")
+
+    # Medications
+    medications = getattr(profile, "medications", None)
+    if medications:
+        med_names = [m.get("name") if isinstance(m, dict) else str(m) for m in medications]
+        sections.append(
+            f"Current medications: {', '.join(med_names)}. "
+            f"Be aware of potential food-drug interactions."
+        )
+
+    # Taste Preferences
+    taste_prefs = getattr(profile, "taste_preferences", None)
+    if taste_prefs and isinstance(taste_prefs, dict):
+        dominant = [k for k, v in taste_prefs.items() if isinstance(v, (int, float)) and v >= 4]
+        avoided = [k for k, v in taste_prefs.items() if isinstance(v, (int, float)) and v <= 1]
+        if dominant:
+            sections.append(f"Prefers {', '.join(dominant)} flavors (score ≥ 4/5)")
+        if avoided:
+            sections.append(f"Dislikes {', '.join(avoided)} flavors (score ≤ 1/5)")
+
+    # Disliked Foods
+    disliked = getattr(profile, "disliked_foods", None)
+    if disliked and isinstance(disliked, list):
+        items = [d if isinstance(d, str) else d.get("name", "") for d in disliked]
+        sections.append(f"Dislikes these foods: {', '.join(items)}")
+
+    # Cuisine Preferences
+    cuisines = getattr(profile, "cuisine_preferences", None)
+    if cuisines and isinstance(cuisines, list):
+        sections.append(f"Preferred cuisines: {', '.join(cuisines)}")
+
+    # Sleep
+    sleep_hours = getattr(profile, "sleep_duration_hours", None)
+    sleep_quality = getattr(profile, "sleep_quality", None)
+    if sleep_hours:
+        sq = sleep_quality.value if hasattr(sleep_quality, "value") else (sleep_quality or "unknown")
+        sections.append(
+            f"Sleeps ~{sleep_hours}h/night (quality: {sq})"
+        )
+
+    # Stress Level
+    stress = getattr(profile, "stress_level", None)
+    if stress and stress >= 7:
+        sections.append(
+            "High stress level reported — consider magnesium, B-vitamins, adaptogens in suggestions"
+        )
+
+    # Disclaimer when health conditions present
+    if conditions:
+        sections.append(
+            "IMPORTANT DISCLAIMER: Đây là gợi ý dinh dưỡng chung. "
+            "Hãy tham khảo bác sĩ hoặc chuyên gia dinh dưỡng trước khi thay đổi chế độ ăn."
+        )
+
+    return "\n".join(sections)
 
 
 async def get_active_goal(db: AsyncSession, user_id: UUID):
@@ -79,6 +205,7 @@ async def build_chatbot_context(
 
     result_meals = await db.execute(
         select(MealLog)
+        .options(selectinload(MealLog.items))
         .where(MealLog.user_id == user_id)
         .order_by(MealLog.meal_time.desc())
         .limit(policy.max_recent_meals)
@@ -134,7 +261,7 @@ async def build_chatbot_context(
     }
 
     if profile:
-        context["profile"] = {
+        profile_dict = {
             "gender": profile.gender.value if hasattr(profile.gender, "value") else str(profile.gender),
             "date_of_birth": profile.date_of_birth,
             "height_cm": profile.height_cm,
@@ -143,10 +270,39 @@ async def build_chatbot_context(
             "activity_level": profile.activity_level.value if hasattr(profile.activity_level, "value") else str(profile.activity_level),
             "diet_type": profile.diet_type.value if hasattr(profile.diet_type, "value") else str(profile.diet_type),
             "allergies": profile.allergies,
+            "allergies_text": profile.allergies_text,
             "disliked_foods": profile.disliked_foods,
+            "disliked_foods_text": profile.disliked_foods_text,
             "preferred_foods": profile.preferred_foods,
+            "preferred_foods_text": profile.preferred_foods_text,
             "health_note": profile.health_note,
+            # Extended fields
+            "usage_goal": profile.usage_goal.value if profile.usage_goal and hasattr(profile.usage_goal, "value") else profile.usage_goal,
+            "usage_goal_note": profile.usage_goal_note,
+            "health_conditions": profile.health_conditions,
+            "allergies_jsonb": profile.allergies,
+            "medications": profile.medications,
+            "dietary_restrictions": profile.dietary_restrictions,
+            "sleep_duration_hours": profile.sleep_duration_hours,
+            "sleep_quality": profile.sleep_quality.value if profile.sleep_quality and hasattr(profile.sleep_quality, "value") else profile.sleep_quality,
+            "sleep_schedule": profile.sleep_schedule,
+            "stress_level": profile.stress_level,
+            "meal_frequency": profile.meal_frequency.value if profile.meal_frequency and hasattr(profile.meal_frequency, "value") else profile.meal_frequency,
+            "cooking_preference": profile.cooking_preference.value if profile.cooking_preference and hasattr(profile.cooking_preference, "value") else profile.cooking_preference,
+            "wake_up_time": profile.wake_up_time,
+            "sleep_time": profile.sleep_time,
+            "work_schedule": profile.work_schedule,
+            "taste_preferences": profile.taste_preferences,
+            "cuisine_preferences": profile.cuisine_preferences,
+            "favorite_foods": profile.favorite_foods,
+            "eating_speed": profile.eating_speed,
+            "chew_difficulty": profile.chew_difficulty,
         }
+        # Inject health context as a structured string for the AI
+        profile_dict["_health_context"] = build_health_context(profile)
+        context["profile"] = profile_dict
+        # Keep ORM object for use by callers (e.g., card_triggers)
+        context["_profile_object"] = profile
 
     if active_goal:
         context["active_goal"] = {

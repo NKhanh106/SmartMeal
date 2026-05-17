@@ -46,6 +46,14 @@ export const authService = {
   },
 
   /**
+   * PATCH /api/v1/auth/me — update current user's full_name
+   */
+  async updateUser(data: { full_name?: string }): Promise<UserResponse> {
+    const response = await apiClient.patch<UserResponse>("/api/v1/auth/me", data);
+    return response.data;
+  },
+
+  /**
    * Store both tokens in localStorage
    */
   setTokens(accessToken: string, refreshToken?: string): void {

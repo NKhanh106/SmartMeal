@@ -25,8 +25,8 @@ router = APIRouter(prefix="/ai/daily-planner", tags=["AI Daily Planner"])
 @limiter.limit("5/minute")
 async def generate_daily_planner_for_user(
     user_id: UUID,
-    target_date: Optional[date] = Query(default=None),
     request: Request,
+    target_date: Optional[date] = Query(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -42,8 +42,8 @@ async def generate_daily_planner_for_user(
 @router.post("/generate", response_model=GenerateDailyPlannerResponse)
 @limiter.limit("5/minute")
 async def generate_my_daily_planner(
-    target_date: Optional[date] = Query(default=None),
     request: Request,
+    target_date: Optional[date] = Query(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

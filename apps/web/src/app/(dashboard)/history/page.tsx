@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import {
   Table,
   TableBody,
@@ -13,8 +14,19 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { AlertCircle, Loader2, Plus, Trash2, UtensilsCrossed } from "lucide-react";
 import { mealService } from "@/services/meal.service";
+import { useToast } from "@/hooks/use-toast";
 import type { MealLogSummaryResponse } from "@/lib/types/api";
 
 function MealTypeBadge({ mealType }: { mealType: string }) {
@@ -44,10 +56,20 @@ function formatDate(isoString: string) {
 }
 
 export default function HistoryPage() {
+  return (
+    <ErrorBoundary>
+      <HistoryPageInner />
+    </ErrorBoundary>
+  );
+}
+
+function HistoryPageInner() {
   const [logs, setLogs] = useState<MealLogSummaryResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const { toast } = useToast();
 
   const fetchLogs = useCallback(async () => {
     setLoading(true);
@@ -68,26 +90,32 @@ export default function HistoryPage() {
   }, [fetchLogs]);
 
   const handleDelete = useCallback(async (logId: string) => {
-    if (!confirm("Delete this meal log? This cannot be undone.")) return;
     setDeletingId(logId);
     try {
       await mealService.deleteMealLog(logId);
       setLogs((prev) => prev.filter((l) => l.id !== logId));
+      toast({ title: "Meal deleted successfully." });
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to delete meal log");
+      toast({
+        title: "Failed to delete meal.",
+        description: e instanceof Error ? e.message : "Please try again.",
+        variant: "destructive",
+      });
     } finally {
       setDeletingId(null);
+      setDeleteConfirmId(null);
     }
-  }, []);
+  }, [toast]);
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-        <h1 className="text-3xl font-bold">Meal History</h1>
-        <p className="text-muted-foreground">Your logged meals over time.</p>
-      </div>
-      </div>
+    <>
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+          <h1 className="text-3xl font-bold">Meal History</h1>
+          <p className="text-muted-foreground">Your logged meals over time.</p>
+        </div>
+        </div>
 
       {/* Error */}
       {error && (
@@ -173,7 +201,7 @@ export default function HistoryPage() {
                         variant="ghost"
                         className="h-8 w-8 p-0 text-slate-400 hover:text-red-500"
                         disabled={deletingId === log.id}
-                        onClick={() => handleDelete(log.id)}
+                        onClick={() => setDeleteConfirmId(log.id)}
                         title="Delete meal log"
                       >
                         {deletingId === log.id ? (
@@ -190,6 +218,28 @@ export default function HistoryPage() {
           </CardContent>
         </Card>
       )}
-    </div>
+      </div>
+      {/* ── Delete Confirmation Dialog ──────────────────────────────────────── */}
+      <AlertDialog open={deleteConfirmId !== null} onOpenChange={(open) => !open && setDeleteConfirmId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete meal log?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action cannot be undone. The meal will be permanently removed from your history.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteConfirmId && handleDelete(deleteConfirmId)}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
+

@@ -7,7 +7,7 @@ from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
-from app.models.enums import ItemSourceType, MealTypeEnum
+from app.models.enums import ItemSourceType, MealLogSourceType, MealTypeEnum
 
 
 class MealLog(Base):
@@ -40,6 +40,12 @@ class MealLog(Base):
 
     image_url: Mapped[Optional[str]] = mapped_column(Text)
     image_storage_path: Mapped[Optional[str]] = mapped_column(Text)
+
+    source: Mapped[MealLogSourceType] = mapped_column(
+        nullable=False,
+        default=MealLogSourceType.manual,
+        server_default="manual",
+    )
 
     ai_model: Mapped[Optional[str]] = mapped_column(String(100))
     ai_confidence: Mapped[Optional[float]] = mapped_column(Numeric(5, 4))

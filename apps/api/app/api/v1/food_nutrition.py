@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -77,17 +77,19 @@ async def search_food_nutrition(
     current_user: User = Depends(get_current_user),
     limit: int = Query(default=20, ge=1, le=100),
 ):
-    search_pattern = f"%{keyword.strip()}%"
+    # Use pg_trgm similarity for fast fuzzy search instead of ilike.
+    # GIN index on food_name covers all similarity patterns.
+    # similarity() > 0.2 catches even short common prefixes like "ga".
     result = await db.execute(
         select(FoodNutrition)
         .where(
             or_(
-                FoodNutrition.food_name.ilike(search_pattern),
-                FoodNutrition.food_name_vi.ilike(search_pattern),
-                FoodNutrition.food_name_en.ilike(search_pattern),
+                func.similarity(FoodNutrition.food_name, keyword) > 0.2,
+                func.similarity(FoodNutrition.food_name_vi, keyword) > 0.2,
+                func.similarity(FoodNutrition.food_name_en, keyword) > 0.2,
             )
         )
-        .order_by(FoodNutrition.is_verified.desc(), FoodNutrition.food_name.asc())
+        .order_by(FoodNutrition.is_verified.desc(), func.similarity(FoodNutrition.food_name, keyword).desc())
         .limit(limit)
     )
     return list(result.scalars().all())

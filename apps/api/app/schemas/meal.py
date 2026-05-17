@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.enums import ItemSourceType, MealTypeEnum
+from app.models.enums import ItemSourceType, MealLogSourceType, MealTypeEnum
 
 
 class MealItemCreate(BaseModel):
@@ -28,6 +28,8 @@ class MealLogCreate(BaseModel):
 
     image_url: Optional[str] = None
     image_storage_path: Optional[str] = None
+
+    source: MealLogSourceType = MealLogSourceType.manual
 
     note: Optional[str] = None
 
@@ -71,6 +73,8 @@ class MealLogResponse(BaseModel):
     image_url: Optional[str] = None
     image_storage_path: Optional[str] = None
 
+    source: MealLogSourceType
+
     total_calories: Decimal
     total_protein_g: Decimal
     total_carb_g: Decimal
@@ -92,6 +96,8 @@ class MealLogSummaryResponse(BaseModel):
     user_id: UUID
     meal_type: MealTypeEnum
     meal_time: datetime
+
+    source: MealLogSourceType
 
     total_calories: Decimal
     total_protein_g: Decimal

@@ -16,6 +16,7 @@ from app.schemas.nutrition_goal import (
     NutritionGoalCalculateResponse,
     NutritionGoalCreate,
     NutritionGoalResponse,
+    NutritionGoalUpdate,
 )
 from app.services.nutrition_service import calculate_nutrition_targets
 
@@ -64,6 +65,7 @@ async def create_nutrition_goal(
         user_id=current_user.id,
         goal_type=payload.goal_type,
         target_weight_kg=payload.target_weight_kg,
+        hydration_goal_ml=payload.hydration_goal_ml,
         start_date=start_date,
         end_date=payload.end_date,
         bmi=targets["bmi"],
@@ -96,6 +98,49 @@ async def get_my_active_nutrition_goal(
     current_user: User = Depends(get_current_user),
 ):
     return await _get_active_goal_or_404(db, current_user.id)
+
+
+@router.put("/{goal_id}", response_model=NutritionGoalResponse)
+async def update_nutrition_goal(
+    goal_id: int,
+    goal_data: NutritionGoalUpdate,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    Partially update an existing nutrition goal.
+    Only the goal owner can update their goals.
+    """
+    result = await session.execute(
+        select(NutritionGoal).where(NutritionGoal.id == goal_id)
+    )
+    goal = result.scalar_one_or_none()
+    if not goal:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Nutrition goal not found.",
+        )
+    if goal.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to update this goal.",
+        )
+
+    update_values = goal_data.model_dump(exclude_unset=True)
+    for field, value in update_values.items():
+        setattr(goal, field, value)
+
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Could not update nutrition goal because of a data conflict.",
+        )
+
+    await session.refresh(goal)
+    return goal
 
 
 @router.get("/{user_id}/active", response_model=NutritionGoalResponse)

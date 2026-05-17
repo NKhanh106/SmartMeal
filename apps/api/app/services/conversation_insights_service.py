@@ -12,8 +12,14 @@ Các thông tin được trích xuất:
 - Thông tin tổng quát
 
 Deduplication: cùng (user_id, key) → upsert.
+
+Performance:
+- AI calls are wrapped with 10s timeout to prevent hanging on slow providers.
+- Upsert uses batch fetch (not N+1) after flush for efficiency.
 """
 
+import asyncio
+import json
 import logging
 import time
 from uuid import UUID
@@ -33,6 +39,7 @@ from app.services.ai_log_service import create_ai_log
 logger = logging.getLogger(__name__)
 
 _INSIGHT_EXTRACTION_PROMPT_VERSION = "insight_extraction_v1"
+_INSIGHT_EXTRACTION_TIMEOUT_SECONDS = 10
 
 
 async def extract_insights_from_conversation(
@@ -69,14 +76,18 @@ async def extract_insights_from_conversation(
 
     try:
         # Dùng generate_text vì đây là text-to-text, không phải vision
-        raw_response = await run_in_threadpool(
-            provider.generate_text,
-            system_prompt=(
-                "Ban la AI tro giup SmartMeal. Tra loi JSON hop le theo schema duoc yeu cau. "
-                "Chi tra ve JSON, khong giai thich gi them."
+        # Wrap with asyncio.wait_for to add timeout (prevents slow AI provider from hanging)
+        raw_response = await asyncio.wait_for(
+            run_in_threadpool(
+                provider.generate_text,
+                system_prompt=(
+                    "Ban la AI tro giup SmartMeal. Tra loi JSON hop le theo schema duoc yeu cau. "
+                    "Chi tra ve JSON, khong giai thich gi them."
+                ),
+                user_prompt=prompt,
+                temperature=0.1,
             ),
-            user_prompt=prompt,
-            temperature=0.1,
+            timeout=_INSIGHT_EXTRACTION_TIMEOUT_SECONDS,
         )
 
         latency_ms = int((time.perf_counter() - start_time) * 1000)
@@ -156,8 +167,7 @@ async def upsert_conversation_insights(
     if not insights:
         return []
 
-    results: list[ConversationInsight] = []
-
+    # Batch upsert: execute all inserts first, then fetch in one query (fixes N+1)
     for item in insights:
         stmt = pg_insert(ConversationInsight).values(
             user_id=user_id,
@@ -182,16 +192,17 @@ async def upsert_conversation_insights(
 
         await db.execute(stmt)
 
-        # Fetch updated/inserted record
-        result = await db.execute(
-            select(ConversationInsight).where(
-                ConversationInsight.user_id == user_id,
-                ConversationInsight.key == item.key,
-            )
+    # Flush all upserts, then batch fetch all records at once (instead of N+1 fetches)
+    await db.flush()
+
+    insight_keys = [item.key for item in insights]
+    result = await db.execute(
+        select(ConversationInsight).where(
+            ConversationInsight.user_id == user_id,
+            ConversationInsight.key.in_(insight_keys),
         )
-        record = result.scalar_one_or_none()
-        if record:
-            results.append(record)
+    )
+    results = list(result.scalars().all())
 
     await db.commit()
     logger.info(

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -133,6 +134,14 @@ function WorkoutItemRow({ item }: { item: WorkoutItemResponse }) {
 }
 
 export default function WorkoutPage() {
+  return (
+    <ErrorBoundary>
+      <WorkoutPageInner />
+    </ErrorBoundary>
+  );
+}
+
+function WorkoutPageInner() {
   const { user } = useAuth();
   const router = useRouter();
   const { toast } = useToast();

@@ -90,15 +90,23 @@ def _get_effective_user_id(
 async def recognize_meal_image(
     request: Request,
     meal_type: str = Form(...),
-    target_user_id: UUID | None = Form(default=None),
     image: UploadFile = File(...),
+    target_user_id: UUID | None = Form(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
     Dedicated food recognition endpoint with Redis caching.
     Returns AI-detected dishes with cached result for duplicate images.
+
+    DEPRECATED: This endpoint is disabled. Use chat-based meal logging instead.
     """
+    if not settings.FEATURE_IMAGE_MEAL_UPLOAD_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Image-based meal logging has been deprecated. Please use chat-based meal logging instead.",
+        )
+
     import json
     import logging
 
@@ -181,13 +189,24 @@ async def recognize_meal_image(
 @router.post("/preview", response_model=MealUpdatePreviewResponse)
 @limiter.limit("10/minute")
 async def preview_meal_from_image(
-    meal_type: str = Form(...),
-    target_user_id: UUID | None = Form(default=None),
-    image: UploadFile = File(...),
     request: Request,
+    meal_type: str = Form(...),
+    image: UploadFile = File(...),
+    target_user_id: UUID | None = Form(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """
+    Preview meal from uploaded image.
+
+    DEPRECATED: This endpoint is disabled. Use chat-based meal logging instead.
+    """
+    if not settings.FEATURE_IMAGE_MEAL_UPLOAD_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Image-based meal logging has been deprecated. Please use chat-based meal logging instead.",
+        )
+
     image_bytes = _validate_image(image)
     effective_user_id = _get_effective_user_id(current_user, target_user_id)
 

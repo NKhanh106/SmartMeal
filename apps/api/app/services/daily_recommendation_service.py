@@ -34,16 +34,6 @@ from app.services.planner_constraint_engine import (
 )
 
 
-async def get_active_goal(db: AsyncSession, user_id: UUID):
-    result = await db.execute(
-        select(NutritionGoal).where(
-            NutritionGoal.user_id == user_id,
-            NutritionGoal.is_active.is_(True),
-        )
-    )
-    return result.scalar_one_or_none()
-
-
 async def build_daily_planner_context(
     db: AsyncSession,
     user_id: UUID,
@@ -147,7 +137,9 @@ async def upsert_daily_recommendation(
     rec.lifestyle_suggestion = ai_result.lifestyle_suggestion
 
     rec.ai_summary = ai_result.summary
-    rec.ai_raw_response = raw_response
+    # Store only a debug summary of the AI response (max 500 chars).
+    # Full JSON blobs cause DB bloat (KB per record).
+    rec.ai_raw_response = str(raw_response)[:500] if raw_response else None  # type: ignore — TEXT column
     rec.ai_analysis_log_id = ai_analysis_log_id
     rec.status = "generated"
 

@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     VERSION: str = "0.1.0"
     API_V1_STR: str = "/api/v1"
     ENVIRONMENT: str = "development"
+    LOG_LEVEL: str = "INFO"
 
     BACKEND_CORS_ORIGINS: List[AnyHttpUrl] | List[str] = ["http://localhost:3000"]
 
@@ -65,6 +66,9 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "uploads"
     MAX_IMAGE_SIZE_BYTES: int = 5 * 1024 * 1024  # 5 MB
     IMAGE_PUBLIC_BASE_URL: str = "/uploads"
+
+    # ── Feature Flags ─────────────────────────────────────────────────────────
+    FEATURE_IMAGE_MEAL_UPLOAD_ENABLED: bool = False  # Deprecated: image upload for meal logging
 
     # ── Redis Cache Settings ──────────────────────────────────────────────────────
     REDIS_URL: str = "redis://localhost:6379/0"

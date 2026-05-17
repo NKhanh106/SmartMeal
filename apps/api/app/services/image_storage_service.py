@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import UploadFile
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -263,12 +263,32 @@ async def list_user_images(
         query = query.where(UploadedImage.image_type == image_type)
         count_query = count_query.where(UploadedImage.image_type == image_type)
 
-    # Total count
-    count_result = await db.execute(count_query)
-    total = len(count_result.all())
+    # Total count (efficient COUNT query, not loading all IDs)
+    total = await db.scalar(
+        select(func.count(UploadedImage.id))
+        .where(UploadedImage.user_id == user_id, UploadedImage.deleted_at.is_(None))
+    ) or 0
+    if image_type:
+        total = await db.scalar(
+            select(func.count(UploadedImage.id))
+            .where(
+                UploadedImage.user_id == user_id,
+                UploadedImage.deleted_at.is_(None),
+                UploadedImage.image_type == image_type,
+            )
+        ) or 0
 
     # Paginated results
-    query = query.order_by(UploadedImage.created_at.desc()).offset(skip).limit(limit)
+    query = (
+        select(UploadedImage)
+        .where(UploadedImage.user_id == user_id, UploadedImage.deleted_at.is_(None))
+        .order_by(UploadedImage.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+    )
+    if image_type:
+        query = query.where(UploadedImage.image_type == image_type)
+
     result = await db.execute(query)
     records = result.scalars().all()
 

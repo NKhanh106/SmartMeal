@@ -286,26 +286,3 @@ async def record_meal_feedback(
     return feedback
 
 
-async def get_user_feedback_stats(
-    db: AsyncSession,
-    user_id: UUID,
-    days: int = 30,
-) -> dict:
-    """Get aggregate feedback statistics for a user."""
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-
-    result = await db.execute(
-        select(func.count(MealFeedback.id), func.avg(MealFeedback.accuracy_rating))
-        .where(
-            MealFeedback.user_id == user_id,
-            MealFeedback.created_at >= cutoff,
-        )
-    )
-    row = result.one()
-    count, avg_rating = row
-
-    return {
-        "feedback_count": count or 0,
-        "avg_accuracy_rating": round(float(avg_rating), 1) if avg_rating else None,
-        "period_days": days,
-    }

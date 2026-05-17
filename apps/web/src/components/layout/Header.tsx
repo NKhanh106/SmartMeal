@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import { Bell, Search, Loader2 } from "lucide-react";
 import { useAuth } from "@/contexts/auth-context";
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,8 @@ import {
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { MobileNav } from "./Sidebar";
 import Link from "next/link";
+import { useDebounce } from "@/hooks/use-debounce";
+import { useState } from "react";
 
 function getInitials(name?: string | null, email?: string | null): string {
   if (name) {
@@ -28,8 +31,14 @@ function getInitials(name?: string | null, email?: string | null): string {
   return "JD";
 }
 
-export function Header() {
+export const Header = memo(function Header() {
   const { user, isLoading } = useAuth();
+  const [searchValue, setSearchValue] = useState("");
+  const debouncedSearch = useDebounce(searchValue, 300);
+
+  // Search is triggered here when debouncedSearch changes
+  // Wire this to an actual search API when available:
+  // useEffect(() => { if (debouncedSearch) search(debouncedSearch); }, [debouncedSearch]);
 
   return (
     <header className="sticky top-0 z-30 flex h-20 w-full items-center justify-between border-b bg-white/80 px-6 backdrop-blur-xl md:px-10">
@@ -40,6 +49,8 @@ export function Header() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 group-focus-within:text-emerald-500 transition-colors" />
             <Input
               placeholder="Search health data..."
+              value={searchValue}
+              onChange={(e) => setSearchValue(e.target.value)}
               className="h-10 w-[240px] lg:w-[320px] pl-10 border-slate-100 bg-slate-50/50 focus-visible:ring-emerald-500/20 focus-visible:bg-white transition-all rounded-xl"
             />
           </div>
@@ -115,7 +126,7 @@ export function Header() {
       </div>
     </header>
   );
-}
+});
 
 function LogoutButton() {
   const { logout } = useAuth();

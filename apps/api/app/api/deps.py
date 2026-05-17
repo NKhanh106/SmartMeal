@@ -41,12 +41,12 @@ async def get_current_user(
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Tai khoan da bi vo hieu hoa.",
+            detail="This account has been deactivated.",
         )
     if user.deleted_at is not None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Tai khoan da bi xoa.",
+            detail="This account has been deleted.",
         )
 
     return user
@@ -64,7 +64,7 @@ async def require_admin(
     if current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Ban khong co quyen thuc hien thao tac nay.",
+            detail="You do not have permission to perform this action.",
         )
     return current_user
 
@@ -78,5 +78,5 @@ def ensure_user_access(current_user: User, owner_id: UUID) -> None:
     if current_user.id != owner_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Ban khong co quyen truy cap du lieu nay.",
+            detail="You do not have permission to access this data.",
         )

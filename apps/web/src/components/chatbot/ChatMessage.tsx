@@ -1,19 +1,21 @@
 "use client";
 
-import { Bot, User } from "lucide-react";
+import { Bot, RefreshCw, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ChatMessage as ChatMessageType } from "@/components/chatbot/types";
 
 interface ChatMessageProps {
   message: ChatMessageType;
+  onRetry?: () => void;
 }
 
 function formatTime(date: Date): string {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-export function ChatMessage({ message }: ChatMessageProps) {
+export function ChatMessage({ message, onRetry }: ChatMessageProps) {
   const isUser = message.role === "user";
+  const isError = message.isError === true;
 
   return (
     <div
@@ -28,6 +30,8 @@ export function ChatMessage({ message }: ChatMessageProps) {
           "h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm border",
           isUser
             ? "bg-slate-50 border-slate-100 text-slate-600"
+            : isError
+            ? "bg-red-50 border-red-100 text-red-500"
             : "bg-emerald-50 border-emerald-100 text-emerald-600"
         )}
       >
@@ -40,6 +44,8 @@ export function ChatMessage({ message }: ChatMessageProps) {
           "px-4 py-3 rounded-2xl text-sm leading-relaxed",
           isUser
             ? "bg-emerald-500 text-white rounded-tr-none shadow-md shadow-emerald-500/20"
+            : isError
+            ? "bg-red-50 text-red-800 rounded-tl-none border border-red-100"
             : "bg-slate-50 text-slate-800 rounded-tl-none border border-slate-100"
         )}
       >
@@ -55,6 +61,15 @@ export function ChatMessage({ message }: ChatMessageProps) {
         >
           {formatTime(message.timestamp)}
         </div>
+        {isError && onRetry && (
+          <button
+            onClick={onRetry}
+            className="mt-2 flex items-center gap-1 text-xs text-red-500 hover:text-red-700 transition-colors"
+          >
+            <RefreshCw className="h-3 w-3" />
+            Thử lại
+          </button>
+        )}
       </div>
     </div>
   );

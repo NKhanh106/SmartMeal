@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.uploaded_image import (
@@ -58,6 +59,11 @@ async def upload_image(
     - **linked_entity_type**: optional entity to link this image to (e.g. "meal_log")
     - **linked_entity_id**: optional ID of the linked entity
     """
+    if not settings.FEATURE_IMAGE_MEAL_UPLOAD_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Image upload feature is currently disabled.",
+        )
     result = await save_image(
         db=db,
         file=file,

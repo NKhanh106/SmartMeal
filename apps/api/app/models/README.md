@@ -1,92 +1,137 @@
-# Thư mục models/ - Database ORM Models
+# Thư mục `models/` — SQLAlchemy ORM Models
 
 ## Mục đích
 
-Chứa các **SQLAlchemy ORM models** - định nghĩa cấu trúc các bảng trong PostgreSQL database dưới dạng Python classes. Mỗi model tương ứng với một bảng trong database.
+Chứa toàn bộ **SQLAlchemy ORM models** — định nghĩa cấu trúc 16 bảng trong PostgreSQL database dưới dạng các Python class. Mỗi model tương ứng với một bảng, và các mối quan hệ (relationships) giữa các bảng được thiết lập qua đây.
 
 ## Tại sao dùng ORM?
 
-- **An toàn**: Tránh SQL injection
-- **Tiện lợi**: Làm việc với database qua objects thay vì raw SQL
-- **Quản lý**: Dễ dàng migrate và version database schema
-- **Relationship**: Dễ dàng thiết lập quan hệ giữa các bảng
+- **An toàn**: Tránh SQL injection vì không dùng raw SQL trực tiếp
+- **Type-safe**: Nhờ SQLAlchemy 2.0 style với `Mapped[]` và `mapped_column`, IDE có thể type-check
+- **Quản lý schema**: Alembic migrations tự động sinh từ các thay đổi ở đây
+- **Relationship**: Dễ dàng `.relationship()` để join bảng mà không cần viết SQL
 
-## Các Models
+## Danh sách Models
 
-### Core Models (Users & Authentication)
-| Model | Mô tả |
-|-------|-------|
-| `User` | Tài khoản người dùng (id, email, password_hash, role, created_at) |
-| `UserProfile` | Thông tin cá nhân mở rộng (age, gender, height, weight, activity_level, health_goals) |
+### Models xác thực & người dùng
 
-### Nutrition Models
-| Model | Mô tả |
-|-------|-------|
-| `FoodNutrition` | Database thực phẩm (name, calories, protein, carbs, fat, fiber, serving_size) |
-| `MealLog` | Nhật ký bữa ăn (user_id, date, meal_type, food_items, total_nutrition) |
-| `NutritionGoal` | Mục tiêu dinh dưỡng cá nhân (daily_calories, protein_goal, carbs_goal, fat_goal) |
+| Model | File | Mô tả |
+|-------|------|--------|
+| `User` | `user.py` | Tài khoản người dùng (email, password_hash, role, soft delete) |
+| `UserProfile` | `user_profile.py` | Hồ sơ thể chất (chiều cao, cân nặng, % mỡ, mức vận động, chế độ ăn, dị ứng) |
 
-### Fitness Models
-| Model | Mô tả |
-|-------|-------|
-| `WorkoutPlan` | Kế hoạch tập luyện (name, description, duration, exercises, difficulty) |
-| `WorkoutSession` | Buổi tập cụ thể (plan_id, user_id, date, duration, calories_burned, notes) |
+### Models dinh dưỡng
 
-### Progress Tracking
-| Model | Mô tả |
-|-------|-------|
-| `ProgressLog` | Nhật ký tiến độ (weight, body_measurements, date, notes) |
+| Model | File | Mô tả |
+|-------|------|--------|
+| `NutritionGoal` | `nutrition_goal.py` | Mục tiêu dinh dưỡng cá nhân (BMR, TDEE, BMI, macro targets). Có ràng buộc: mỗi user chỉ có 1 active goal |
+| `FoodNutrition` | `food_nutrition.py` | Cơ sở dữ liệu thực phẩm (tên, calo, protein, carb, fat, fiber, đường, muối per 100g) |
+| `MealLog` | `meal.py` | Nhật ký bữa ăn (user_id, loại bữa ăn, thời gian, tổng macro, ảnh, AI confidence) |
+| `MealItem` | `meal.py` | Chi tiết từng món trong bữa ăn (tên món, cân nặng ước lượng, macro, nguồn: AI nhận diện / người dùng xác nhận / nhập tay) |
 
-### AI & Chat
-| Model | Mô tả |
-|-------|-------|
-| `ChatSession` | Phiên trò chuyện (user_id, created_at, title) |
-| `ChatMessage` | Tin nhắn trong chat (session_id, role, content, timestamp) |
-| `AIUsageLog` | Log sử dụng AI (user_id, endpoint, tokens_used, cost) |
-| `DailyRecommendation` | Đề xuất hàng ngày cho user |
+### Models thể dục
 
-## Cấu trúc Model
+| Model | File | Mô tả |
+|-------|------|--------|
+| `WorkoutPlan` | `workout_plan.py` | Kế hoạch tập luyện (tên, mục tiêu, độ khó, ngày bắt đầu/kết thúc, trạng thái active) |
+| `WorkoutItem` | `workout_item.py` | Bài tập trong kế hoạch (tên bài tập, số set/rep, thời gian, ghi chú) |
+
+### Models theo dõi tiến độ
+
+| Model | File | Mô tả |
+|-------|------|--------|
+| `ProgressLog` | `progress_log.py` | Nhật ký theo dõi cân nặng và số đo cơ thể theo ngày (weight, body fat, waist, neck, chest, hip, ảnh) |
+
+### Models AI & Chat
+
+| Model | File | Mô tả |
+|-------|------|--------|
+| `ChatSession` | `chat.py` | Phiên trò chuyện với AI Coach (user_id, title, status: active/deleted) |
+| `ChatMessage` | `chat.py` | Tin nhắn trong phiên chat (session_id, role: user/assistant, content, metadata JSON) |
+| `AILog` | `ai_log.py` | Log gọi AI API (provider, model, latency, prompt version, raw response, status) |
+| `DailyRecommendation` | `daily_recommendation.py` | Kết quả gợi ý ngày mới từ AI (meal plan + workout plan + insights) |
+
+### Models hệ thống
+
+| Model | File | Mô tả |
+|-------|------|--------|
+| `UploadedImage` | `uploaded_image.py` | Metadata ảnh upload (user_id, loại: avatar/meal/temporary/progress, file_path, TTL, linked_entity) |
+| `ConversationInsight` | `conversation_insight.py` | Insights trích xuất từ cuộc trò chuyện (allergies, preferences, health constraints) |
+
+## Enum Types (`enums.py`)
+
+| Enum | Giá trị | Dùng trong |
+|------|---------|-----------|
+| `GenderType` | nam, nu, khac, khong_muon_noi | UserProfile |
+| `ActivityLevelType` | it_van_dong → van_dong_rat_nhieu | UserProfile, TDEE calculation |
+| `DietTypeEnum` | binh_thuong, an_chay, thuan_chay, keto, it_tinh_bot, nhieu_dam | UserProfile |
+| `NutritionGoalType` | giam_can, giu_can, tang_co | NutritionGoal |
+| `MealTypeEnum` | bua_sang, bua_trua, bua_toi, an_vat, khac | MealLog |
+| `FoodSourceType` | he_thong, usda, thu_cong, ai_goi_y | FoodNutrition |
+| `ItemSourceType` | ai_nhan_dien, nguoi_dung_xac_nhan, nhap_thu_cong | MealItem |
+| `WorkoutDifficultyType` | nguoi_moi, trung_binh, nang_cao | WorkoutPlan |
+
+## Ví dụ cấu trúc Model (SQLAlchemy 2.0 Style)
 
 ```python
-class User(Base):
-    __tablename__ = "users"
-    
-    id = Column(UUID, primary_key=True, default=uuid.uuid4)
-    email = Column(String(255), unique=True, nullable=False, index=True)
-    password_hash = Column(String(255), nullable=False)
-    role = Column(String(50), default="user")
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    # Relationships
-    profile = relationship("UserProfile", back_populates="user", uselist=False)
-    meal_logs = relationship("MealLog", back_populates="user")
-    # ... các relationships khác
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from app.db.session import Base
+
+class MealLog(Base):
+    __tablename__ = "meal_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    meal_type: Mapped[MealTypeEnum] = mapped_column(
+        Enum(MealTypeEnum, name="meal_type_enum", create_type=False),
+        nullable=False, default=MealTypeEnum.khac
+    )
+    total_calories: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=0)
+
+    # Relationship 1-N
+    items = relationship("MealItem", back_populates="meal_log", cascade="all, delete-orphan")
 ```
 
-## Relationships
+## Mối quan hệ giữa các bảng
 
 ```
-User (1) ←→ (1) UserProfile
-User (1) ←→ (N) MealLog
-User (1) ←→ (N) NutritionGoal
-User (1) ←→ (N) WorkoutPlan
-User (1) ←→ (N) WorkoutSession
-User (1) ←→ (N) ProgressLog
-User (1) ←→ (N) ChatSession (1) ←→ (N) ChatMessage
+users (1)───(1) user_profiles
+     │
+     ├──(N) meal_logs ──(N) meal_items
+     ├──(N) nutrition_goals
+     ├──(N) progress_logs
+     ├──(N) workout_plans ──(N) workout_items
+     ├──(N) chat_sessions ──(N) chat_messages
+     ├──(N) ai_analysis_logs
+     ├──(N) daily_recommendations
+     ├──(N) uploaded_images
+     └──(N) conversation_insights
 ```
 
-## Migrations
+## Ràng buộc đặc biệt (Constraints)
 
-Khi thay đổi models, cần chạy Alembic migration:
+- **unique constraint**: `user_profiles.user_id` — mỗi user chỉ có 1 profile
+- **partial unique index**: `nutrition_goals` — chỉ có 1 active goal mỗi user (`is_active = true`)
+- **unique constraint**: `progress_logs(user_id, log_date)` — mỗi user chỉ ghi 1 log mỗi ngày
+- **check constraint**: `users.role IN ('user', 'admin')`
+- **foreign key constraint**: `meal_logs(nutrition_goal_id, user_id)` → `nutrition_goals(id, user_id)` (composite FK)
+
+## Cách tạo migration khi thay đổi model
+
 ```bash
-alembic revision --autogenerate -m "description"
+cd apps/api
+alembic revision --autogenerate -m "Mô tả thay đổi"
 alembic upgrade head
 ```
 
 ## Best Practices
 
-- Mỗi model nên có `__repr__` để debug dễ dàng
-- Sử dụng UUID thay vì auto-increment integer cho security
-- Thiết lập indexes cho các trường thường query (email, user_id, date)
-- Sử dụng `default=func.now()` cho timestamps thay vì Python datetime
+- Luôn dùng `server_default=text("now()")` cho timestamp thay vì Python datetime
+- Dùng UUID thay vì auto-increment integer cho primary key (bảo mật hơn)
+- Soft delete (xoá mềm) bằng `deleted_at` thay vì hard delete cho User
+- Đặt `nullable=False` chỉ khi thực sự bắt buộc
+- Thêm index cho các trường thường xuyên query (user_id, created_at, log_date)

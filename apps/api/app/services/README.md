@@ -1,157 +1,174 @@
-# Thư mục services/ - Business Logic Layer
+# Thư mục `services/` — Business Logic Layer
 
 ## Mục đích
 
-Chứa các **service classes** - nơi viết logic nghiệp vụ chính của ứng dụng. Services tách biệt business logic khỏi API routes, giúp code sạch hơn, dễ test hơn, và tái sử dụng được.
+Chứa toàn bộ **business logic** của backend SmartMeal, tách biệt khỏi API routes. Mỗi service đóng gói logic nghiệp vụ cho một domain cụ thể. Design pattern này giúp code **dễ test**, **tái sử dụng**, và **bảo trì** hơn.
 
-## Kiến trúc Layer
+## Kiến trúc phân lớp
 
 ```
-API Route → Service Layer → Database (Models)
+API Route (app/api/v1/)
+    ↓ (Pydantic Schema Validation)
+Service Layer (app/services/)   ← Business Logic ở đây
+    ↓
+Model Layer (app/models/)       ← ORM entities
+    ↓
+Database (PostgreSQL)
 ```
 
-**Benefits:**
-- **Separation of Concerns**: API routes chỉ xử lý HTTP, services xử lý business logic
-- **Reusability**: Nhiều endpoints có thể gọi cùng một service
-- **Testability**: Dễ dàng viết unit tests cho services
-- **Maintainability**: Thay đổi business logic chỉ cần sửa một chỗ
+## Danh sách Services
 
-## Các Services
+### Nutrition & Meal Services
 
-### meal_service.py
-Xử lý nghiệp vụ liên quan đến bữa ăn:
-- Tạo/cập nhật/xóa meal logs
-- Tính toán tổng dinh dưỡng của bữa ăn
-- Validate food items
-- Lấy meal history theo ngày/tuần/tháng
-- Tính macro nutrients breakdown
+| Service | File | Mô tả |
+|---------|------|--------|
+| `meal_service` | `meal_service.py` | Tạo meal log kèm items, cập nhật tổng macro, validate items |
+| `nutrition_service` | `nutrition_service.py` | Tính BMR/Mifflin-St Jeor, TDEE, BMI, macro targets theo mục tiêu |
+| `food_nutrition_service` | `food_nutrition_service.py` | CRUD thực phẩm, tìm kiếm, USDA integration |
+| `food_mapping_service` | `food_mapping_service.py` | Ánh xạ tên món AI nhận diện → food_nutrition DB (fuzzy match, fallback) |
 
-### nutrition_service.py
-Quản lý dinh dưỡng:
-- Tính toán BMR (Basal Metabolic Rate)
-- Tính TDEE (Total Daily Energy Expenditure)
-- Quản lý nutrition goals
-- Tính deficit/surplus calories
-- Theo dõi progress so với goals
+### Dashboard & Progress Services
 
-### workout_service.py
-Quản lý bài tập:
-- CRUD workout plans
-- Ghi nhận workout sessions
-- Tính calories burned
-- Lấy workout history
-- Đề xuất bài tập phù hợp
+| Service | File | Mô tả |
+|---------|------|--------|
+| `dashboard_service` | `dashboard_service.py` | Thống kê calo/macro ngày & tuần, timezone-aware, progress comparison |
+| `progress_log_service` | `progress_log_service.py` | CRUD progress logs, tính BMI, weight trend |
 
-### dashboard_service.py
-Tổng hợp dữ liệu dashboard:
-- Thống kê tuần/tháng
-- Progress charts data
-- Today's summary (calories consumed vs goal)
-- Weekly trends
-- Streak calculations
+### Workout Services
 
-### ai_meal_update_service.py
-AI phân tích bữa ăn:
-- Nhận diện thực phẩm từ mô tả
-- Đề xuất portions
-- Cập nhật meal log tự động
-- Nutrition calculation
+| Service | File | Mô tả |
+|---------|------|--------|
+| `workout_service` | `workout_service.py` | CRUD workout plans, quản lý active plan (1/user), workout items |
 
-## Cấu trúc Service
+### AI Services
+
+| Service | File | Mô tả |
+|---------|------|--------|
+| `ai_meal_update_service` | `ai_meal_update_service.py` | Pipeline nhận diện món ăn từ ảnh: AI Vision → food mapping → nutrition calc |
+| `daily_recommendation_service` | `daily_recommendation_service.py` | AI sinh gợi ý bữa ăn + kế hoạch tập cho ngày mới |
+| `ai_log_service` | `ai_log_service.py` | Ghi log mỗi lần gọi AI (provider, model, latency, prompt, response, status) |
+| `conversation_insights_service` | `conversation_insights_service.py` | Trích xuất & lưu insights từ cuộc trò chuyện (allergy, preferences) |
+| `learning_service` | `learning_service.py` | Ghi nhận phản hồi người dùng về kết quả AI → cải thiện nhận diện |
+
+### Image Services
+
+| Service | File | Mô tả |
+|---------|------|--------|
+| `image_storage_service` | `image_storage_service.py` | Upload, lưu metadata, xóa ảnh, link image → entity |
+| `image_cleanup_scheduler` | `image_cleanup_scheduler.py` | APScheduler: chạy daily lúc 02:00 UTC, xóa ảnh hết hạn |
+
+### Planner Services
+
+| Service | File | Mô tả |
+|---------|------|--------|
+| `planner_constraint_engine` | `planner_constraint_engine.py` | Xây dựng constraints (budget calo, allergies, preferences) cho AI daily planner |
+
+## Ví dụ cấu trúc Service
 
 ```python
-class MealService:
-    def __init__(self, db: Session):
-        self.db = db
-    
-    def create_meal_log(
-        self, 
-        user_id: UUID, 
-        meal_data: CreateMealSchema
-    ) -> MealLog:
-        # Business logic here
-        # Validate
-        # Calculate nutrition
-        # Save to database
-        # Return result
-        pass
-    
-    def get_user_meals(
-        self, 
-        user_id: UUID, 
-        start_date: date, 
-        end_date: date
-    ) -> List[MealLog]:
-        # Query database
-        # Transform data
-        # Return
-        pass
+async def create_meal_log_with_items(
+    db: AsyncSession,
+    payload: MealLogCreate,
+    user_id: UUID,
+) -> MealLog:
+    """Tạo meal log với items, tự động tính tổng macro."""
+    meal = MealLog(
+        user_id=user_id,
+        meal_type=payload.meal_type,
+        meal_time=payload.meal_time,
+    )
+    db.add(meal)
+    await db.flush()
+
+    total_cal = 0.0
+    for item_payload in payload.items:
+        # Business logic: lookup food nutrition, calculate per weight
+        item = MealItem(meal_log_id=meal.id, **item_payload.model_dump())
+        db.add(item)
+        total_cal += item.calories
+
+    meal.total_calories = total_cal
+    await db.commit()
+    await db.refresh(meal)
+    return meal
 ```
 
-## Sử dụng Services
+## Dependency Injection trong FastAPI
 
-Trong API routes:
+Services được gọi trực tiếp từ routes, nhận `db: AsyncSession` qua FastAPI dependency injection:
 
 ```python
-from app.services.meal_service import MealService
-
-@router.post("/meals")
+@router.post("/meal-logs")
 async def create_meal(
-    meal_data: CreateMealSchema,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    payload: MealLogCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    service = MealService(db)
-    result = service.create_meal_log(current_user.id, meal_data)
-    return result
-```
-
-## Dependency Injection
-
-Services được inject vào routes qua FastAPI's `Depends()`:
-
-```python
-def get_meal_service(db: Session = Depends(get_db)) -> MealService:
-    return MealService(db)
-
-@router.post("/meals")
-async def create_meal(
-    meal_data: CreateMealSchema,
-    service: MealService = Depends(get_meal_service)
-):
-    return service.create_meal_log(meal_data)
+    return await create_meal_log_with_items(db, payload, current_user.id)
 ```
 
 ## Transaction Management
 
-Services xử lý database transactions:
+Mỗi service method tự quản lý transaction:
 
 ```python
-def create_meal_with_items(self, user_id: UUID, data: MealSchema):
+async def service_method(db, ...):
     try:
-        # Start transaction
-        meal = self.create_meal_log(user_id, data)
-        
-        for item in data.items:
-            self.add_food_item(meal.id, item)
-        
-        # Commit automatically on success
-        return meal
+        db.add(entity)
+        await db.flush()
+        # ... more operations
+        await db.commit()        # thành công → commit
+        return result
     except Exception:
-        # Rollback on error
-        self.db.rollback()
+        await db.rollback()      # thất bại → rollback
         raise
 ```
 
-## Validation trong Service
+**Lưu ý**: Không bao giờ gọi `commit()` bên trong API route — để service quản lý.
+
+## Cache Invalidation
+
+Khi dữ liệu thay đổi, cần xóa cache tương ứng:
 
 ```python
-def validate_portion(self, food_id: UUID, quantity: float) -> bool:
-    MIN_PORTION = 0.1  # 100g
-    MAX_PORTION = 5000  # 5kg
-    
-    if not MIN_PORTION <= quantity <= MAX_PORTION:
-        raise ValueError(f"Portion must be between {MIN_PORTION} and {MAX_PORTION}")
-    
-    return True
+# Khi user confirm meal → xóa daily plan cache
+from app.services.daily_recommendation_service import invalidate_user_plan_cache
+await invalidate_user_plan_cache(user_id, date.today())
 ```
+
+## Image Cleanup Scheduler
+
+Scheduler tự động chạy khi backend khởi động (trong `main.py` lifespan):
+
+```python
+from app.services.image_cleanup_scheduler import start_scheduler, stop_scheduler
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    start_scheduler()   # Khởi động APScheduler
+    yield
+    stop_scheduler()    # Dừng khi shutdown
+```
+
+Xóa ảnh theo TTL:
+- `meal`: 7 ngày
+- `temporary`: 1 ngày
+- `avatar`, `progress`: không bao giờ tự xóa
+
+## Testing
+
+```bash
+# Test tất cả services
+cd apps/api
+pytest tests/
+
+# Test cụ thể
+pytest tests/test_meal_service.py -v
+```
+
+## Best Practices
+
+- Mỗi service method phải là `async` để tận dụng async database driver
+- Service không bao giờ raise HTTPException — chỉ return data hoặc raise custom exceptions
+- Validate business rules trong service, không chỉ trong schema
+- Ghi log cho các operation quan trọng (AI calls, image uploads)

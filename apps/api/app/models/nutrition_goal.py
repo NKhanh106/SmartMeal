@@ -48,7 +48,10 @@ class NutritionGoal(Base):
     protein_target_g: Mapped[float] = mapped_column(Numeric(8, 2), nullable=False)
     carb_target_g: Mapped[float] = mapped_column(Numeric(8, 2), nullable=False)
     fat_target_g: Mapped[float] = mapped_column(Numeric(8, 2), nullable=False)
-    
+
+    # Hydration goal in milliliters (ml) — daily water intake target
+    hydration_goal_ml: Mapped[Optional[int]] = mapped_column(Numeric(8, 0), nullable=True)
+
     note: Mapped[Optional[str]] = mapped_column(Text)
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

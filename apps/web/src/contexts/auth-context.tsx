@@ -24,6 +24,7 @@ interface AuthContextValue {
   register: (email: string, password: string, fullName?: string) => Promise<void>;
   logout: () => void;
   refreshUser: () => Promise<void>;
+  updateUser: (data: { full_name?: string }) => Promise<void>;
 }
 
 interface AuthProviderProps {
@@ -136,6 +137,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
     router.replace("/login");
   }, [router]);
 
+  // Update user (e.g. full_name)
+  const updateUser = useCallback(
+    async (data: { full_name?: string }) => {
+      const updated = await authService.updateUser(data);
+      setUser(updated);
+    },
+    []
+  );
+
   const value = useMemo(
     () => ({
       user,
@@ -145,8 +155,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
       logout,
       refreshUser,
       register,
+      updateUser,
     }),
-    [user, isLoading, isAuthenticated, login, logout, refreshUser, register]
+    [user, isLoading, isAuthenticated, login, logout, refreshUser, register, updateUser]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

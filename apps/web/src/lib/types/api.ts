@@ -12,6 +12,32 @@ export type NutritionGoalType = "giam_can" | "giu_can" | "tang_co";
 export type MealType = "bua_sang" | "bua_trua" | "bua_toi" | "an_vat" | "khac";
 export type WorkoutDifficulty = "nguoi_moi" | "trung_binh" | "nang_cao";
 
+// Extended enums for extended profile
+export type UsageGoal =
+  | "muscle_gain"
+  | "weight_loss"
+  | "weight_gain"
+  | "maintain_shape"
+  | "nutrient_supplement"
+  | "medical_treatment"
+  | "balanced_lifestyle"
+  | "sports_performance"
+  | "pregnancy_nursing"
+  | "elderly_nutrition";
+
+export type SleepQuality = "poor" | "fair" | "good" | "excellent";
+
+export type MealFrequency =
+  | "two_meals"
+  | "three_meals"
+  | "four_meals"
+  | "five_plus"
+  | "intermittent_fasting";
+
+export type CookingPreference = "home_cooked" | "eat_out" | "mixed" | "meal_prep";
+
+export type EatingSpeed = "slow" | "normal" | "fast";
+
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
 export interface UserCreate {
@@ -41,9 +67,35 @@ export interface UserResponse {
 
 // ─── User Profile ──────────────────────────────────────────────────────────────
 
+export interface HealthConditionItem {
+  condition: string;
+  severity?: "managed" | "unmanaged" | "resolved";
+  diagnosed_year?: number;
+  note?: string;
+}
+
+export interface AllergyItem {
+  allergen: string;
+  severity?: "mild" | "moderate" | "severe";
+}
+
+export interface MedicationItem {
+  name: string;
+  frequency?: string;
+  note?: string;
+}
+
+export interface TastePreferencesSchema {
+  spicy?: number;
+  sweet?: number;
+  salty?: number;
+  sour?: number;
+  bitter?: number;
+}
+
 export interface UserProfileCreate {
   gender: Gender;
-  date_of_birth: string; // YYYY-MM-DD
+  date_of_birth: string;
   height_cm: number;
   current_weight_kg: number;
   current_body_fat_percent?: number;
@@ -53,10 +105,28 @@ export interface UserProfileCreate {
   current_chest_cm?: number;
   activity_level?: ActivityLevel;
   diet_type?: DietType;
-  allergies?: string;
-  disliked_foods?: string;
-  preferred_foods?: string;
-  health_note?: string;
+  // Extended fields
+  usage_goal?: UsageGoal;
+  usage_goal_note?: string;
+  health_conditions?: HealthConditionItem[];
+  allergies?: AllergyItem[];
+  medications?: MedicationItem[];
+  dietary_restrictions?: string[];
+  sleep_duration_hours?: number;
+  sleep_quality?: SleepQuality;
+  sleep_schedule?: string;
+  stress_level?: number;
+  meal_frequency?: MealFrequency;
+  cooking_preference?: CookingPreference;
+  wake_up_time?: string;
+  sleep_time?: string;
+  work_schedule?: string;
+  taste_preferences?: TastePreferencesSchema;
+  cuisine_preferences?: string[];
+  disliked_foods?: string[];
+  favorite_foods?: string[];
+  eating_speed?: EatingSpeed;
+  chew_difficulty?: boolean;
 }
 
 export type UserProfileUpdate = Partial<UserProfileCreate>;
@@ -75,10 +145,34 @@ export interface UserProfileResponse {
   current_chest_cm?: number;
   activity_level: ActivityLevel;
   diet_type: DietType;
-  allergies?: string;
-  disliked_foods?: string;
-  preferred_foods?: string;
-  health_note?: string;
+  // Extended fields
+  usage_goal?: UsageGoal;
+  usage_goal_note?: string;
+  health_conditions?: HealthConditionItem[];
+  allergies?: AllergyItem[];
+  medications?: MedicationItem[];
+  dietary_restrictions?: string[];
+  sleep_duration_hours?: number;
+  sleep_quality?: SleepQuality;
+  sleep_schedule?: string;
+  stress_level?: number;
+  meal_frequency?: MealFrequency;
+  cooking_preference?: CookingPreference;
+  wake_up_time?: string;
+  sleep_time?: string;
+  work_schedule?: string;
+  taste_preferences?: TastePreferencesSchema;
+  cuisine_preferences?: string[];
+  disliked_foods?: string[];
+  favorite_foods?: string[];
+  eating_speed?: EatingSpeed;
+  chew_difficulty?: boolean;
+  health_risk_flags?: string[];
+  // Legacy (deprecated)
+  allergies_text?: string;
+  disliked_foods_text?: string;
+  preferred_foods_text?: string;
+  // Audit
   created_at: string;
   updated_at: string;
 }
@@ -105,6 +199,7 @@ export interface NutritionGoalCalculateResponse {
 export interface NutritionGoalCreate {
   goal_type: NutritionGoalType;
   target_weight_kg?: number;
+  hydration_goal_ml?: number;
   start_date?: string;
   end_date?: string;
   note?: string;
@@ -117,6 +212,7 @@ export interface NutritionGoalResponse {
   user_id: string;
   goal_type: NutritionGoalType;
   target_weight_kg?: number;
+  hydration_goal_ml?: number;
   start_date: string;
   end_date?: string;
   bmi?: number;
@@ -178,6 +274,7 @@ export interface MealLogResponse {
   meal_time: string;
   image_url?: string;
   image_storage_path?: string;
+  source: "manual" | "chat_extraction" | "chat_command";
   total_calories: number;
   total_protein_g: number;
   total_carb_g: number;
@@ -256,6 +353,7 @@ export interface DailyMealSummary {
   id: string;
   meal_type: MealType;
   meal_time: string;
+  source: "manual" | "chat_extraction" | "chat_command";
   total_calories: number;
   total_protein_g: number;
   total_carb_g: number;
@@ -276,6 +374,7 @@ export interface DailyDashboardResponse {
   carb_progress: MacroProgress;
   fat_progress: MacroProgress;
   meal_count: number;
+  auto_detected_count: number;
   meals: DailyMealSummary[];
 }
 

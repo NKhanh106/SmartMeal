@@ -26,6 +26,7 @@ class NutritionGoalCalculateResponse(BaseModel):
 class NutritionGoalCreate(BaseModel):
     goal_type: NutritionGoalType
     target_weight_kg: Optional[float] = None
+    hydration_goal_ml: Optional[int] = Field(default=None, ge=500, le=8000)
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     note: Optional[str] = None
@@ -41,6 +42,7 @@ class NutritionGoalResponse(BaseModel):
     user_id: UUID
     goal_type: NutritionGoalType
     target_weight_kg: Optional[float]
+    hydration_goal_ml: Optional[int] = None
     start_date: date
     end_date: Optional[date]
 
@@ -59,3 +61,18 @@ class NutritionGoalResponse(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class NutritionGoalUpdate(BaseModel):
+    target_weight_kg: Optional[float] = None
+    hydration_goal_ml: Optional[int] = Field(default=None, ge=500, le=8000)
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    note: Optional[str] = None
+    is_active: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def validate_date_range(self) -> "NutritionGoalUpdate":
+        if self.start_date and self.end_date and self.end_date < self.start_date:
+            raise ValueError("end_date must be greater than or equal to start_date.")
+        return self

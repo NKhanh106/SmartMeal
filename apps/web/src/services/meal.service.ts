@@ -44,6 +44,13 @@ export const mealService = {
   },
 
   /**
+   * GET /api/v1/meal-logs/extracted-today — get meals extracted from chat today
+   */
+  async getExtractedMealsToday(): Promise<MealLogSummaryResponse[]> {
+    return api.get<MealLogSummaryResponse[]>(`${MEAL_BASE}/extracted-today`);
+  },
+
+  /**
    * GET /api/v1/meal-logs/user/{user_id}
    */
   async getMealLogsByUser(

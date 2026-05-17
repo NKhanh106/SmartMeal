@@ -64,6 +64,13 @@ export default function LandingPage() {
                   variant="outline"
                   size="lg"
                   className="rounded-full h-12 px-8 text-lg"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    document.getElementById("features")?.scrollIntoView({
+                      behavior: "smooth",
+                      block: "start",
+                    });
+                  }}
                 >
                   Learn More
                 </Button>
@@ -79,7 +86,7 @@ export default function LandingPage() {
         </section>
 
         {/* Features Section */}
-        <section className="w-full py-24 bg-slate-50">
+        <section id="features" className="w-full py-24 bg-slate-50">
           <div className="container px-4 md:px-6 mx-auto">
             <div className="grid gap-12 lg:grid-cols-3">
               {[

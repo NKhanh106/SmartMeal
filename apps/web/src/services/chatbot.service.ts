@@ -1,118 +1,184 @@
 /**
  * Chatbot service — connects to SmartMeal backend AI Chatbot API.
  *
- * Flow:
- * 1. getOrCreateSession() — creates a new chat session (once per browser session).
- *    After creation, session ID is cached in sessionStorage.
- * 2. sendMessage() — POST /api/v1/ai/chat/sessions/{session_id}/messages
- *    Returns { user_message, assistant_message }
- *
- * The backend handles:
- * - User context building (profile, goals, dashboard, history)
- * - AI generation via Groq
- * - Message persistence
- * - AI audit logging
+ * Session Management:
+ * - Sessions are persistent conversations listed in sidebar
+ * - User can resume any past session
+ * - NEW session only created when user explicitly clicks "New Chat"
+ * - Most recent active session auto-loaded on login/return
+ * - Sessions have auto-generated titles from first message
  */
 
 import { api } from "@/lib/api-client";
-import type { ChatMessage } from "@/components/chatbot/types";
+import type { ChatMessage, ChatSession, ChatMessagesPaginated, StaleSessionWarning } from "@/components/chatbot/types";
+import type { ChatCard, ChatCardResponse } from "@/components/chat/types";
 
-const SESSION_CACHE_KEY = "smartmeal_chatbot_session_id";
 const CHATBOT_SESSION_ENDPOINT = "/api/v1/ai/chat/sessions";
 const CHATBOT_MESSAGES_ENDPOINT = (sessionId: string) =>
   `${CHATBOT_SESSION_ENDPOINT}/${sessionId}/messages`;
 
-// ─── Session management ─────────────────────────────────────────────────────────
+// ─── Types ─────────────────────────────────────────────────────────────────────
 
-interface ChatSessionResponse {
-  id: string;
-  user_id: string;
-  title: string | null;
-  status: string;
-  last_message_at: string | null;
-  created_at: string;
-  updated_at: string;
+interface ChatSessionCreate {
+  title?: string;
 }
 
-interface SendMessageResponse {
-  user_message: {
-    id: string;
-    session_id: string;
-    role: string;
-    content: string;
-    created_at: string;
-    [key: string]: unknown;
-  };
-  assistant_message: {
-    id: string;
-    session_id: string;
-    role: string;
-    content: string;
-    created_at: string;
-    [key: string]: unknown;
-  };
+interface ChatSessionUpdate {
+  title?: string;
 }
 
-/**
- * Get the cached session ID from sessionStorage.
- * Returns null if no session exists yet.
- */
-export function getCachedSessionId(): string | null {
-  if (typeof window === "undefined") return null;
-  return sessionStorage.getItem(SESSION_CACHE_KEY);
-}
-
-/**
- * Cache a session ID in sessionStorage for this browser session.
- */
-function cacheSessionId(sessionId: string): void {
-  if (typeof window !== "undefined") {
-    sessionStorage.setItem(SESSION_CACHE_KEY, sessionId);
-  }
-}
+// ─── Session management ────────────────────────────────────────────────────────
 
 /**
  * Get the existing chat session or create a new one.
  * Reuses cached session if available to maintain conversation history.
  */
-export async function getOrCreateSession(): Promise<ChatSessionResponse> {
-  const cached = getCachedSessionId();
+export async function getOrCreateSession(): Promise<ChatSession> {
+  // Check localStorage for cached session ID
+  const cached = localStorage.getItem("smartmeal_chatbot_session_id");
   if (cached) {
-    // Verify the session still exists by fetching its messages
     try {
-      await api.get<unknown[]>(`${CHATBOT_SESSION_ENDPOINT}/${cached}/messages`);
-      // Session still valid — return it
-      return { id: cached, user_id: "", title: null, status: "active", last_message_at: null, created_at: "", updated_at: "" };
+      // Verify the session still exists
+      const session = await api.get<ChatSession>(`${CHATBOT_SESSION_ENDPOINT}/${cached}`);
+      return session;
     } catch {
-      // Session expired or invalid — clear cache and create new
-      sessionStorage.removeItem(SESSION_CACHE_KEY);
+      // Session expired or invalid — clear cache
+      localStorage.removeItem("smartmeal_chatbot_session_id");
     }
   }
 
   // Create a new session
-  const session = await api.post<ChatSessionResponse>(CHATBOT_SESSION_ENDPOINT, {});
-  cacheSessionId(session.id);
+  const session = await api.post<ChatSession>(CHATBOT_SESSION_ENDPOINT, {});
+  localStorage.setItem("smartmeal_chatbot_session_id", session.id);
   return session;
 }
 
 /**
- * Fetch all messages for the current session.
- * Used on initial load to restore conversation history.
+ * Cache a session ID in localStorage for persistence across browser sessions.
  */
-export async function fetchSessionMessages(sessionId: string): Promise<ChatMessage[]> {
-  const messages = await api.get<ChatSessionResponse[]>(
-    `${CHATBOT_SESSION_ENDPOINT}/${sessionId}/messages`
-  );
-
-  return messages.map((msg) => ({
-    id: msg.id,
-    role: msg.role as "user" | "assistant",
-    content: msg.content,
-    timestamp: new Date(msg.created_at),
-  }));
+export function cacheSessionId(sessionId: string): void {
+  localStorage.setItem("smartmeal_chatbot_session_id", sessionId);
 }
 
-// ─── Send message ───────────────────────────────────────────────────────────────
+/**
+ * Get the cached session ID from localStorage.
+ * Returns null if no session exists yet.
+ */
+export function getCachedSessionId(): string | null {
+  return localStorage.getItem("smartmeal_chatbot_session_id");
+}
+
+/**
+ * List all chat sessions for current user with cursor-based pagination.
+ */
+export async function listChatSessions(
+  limit: number = 20,
+  cursor?: string
+): Promise<{ items: ChatSession[]; has_more: boolean; next_cursor: string | null }> {
+  const params = new URLSearchParams();
+  params.set("limit", String(limit));
+  if (cursor) params.set("cursor", cursor);
+
+  const response = await api.get<{ total: number; items: ChatSession[] }>(
+    `${CHATBOT_SESSION_ENDPOINT}?${params.toString()}`
+  );
+
+  return {
+    items: response.items,
+    has_more: response.total > limit,
+    next_cursor: response.items.length === limit ? response.items[response.items.length - 1].id : null,
+  };
+}
+
+/**
+ * Get the most recent session for auto-resume on login.
+ */
+export async function getLatestSession(): Promise<ChatSession | null> {
+  try {
+    return await api.get<ChatSession | null>(`${CHATBOT_SESSION_ENDPOINT}/latest`);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get a single session by ID.
+ */
+export async function getSession(sessionId: string): Promise<ChatSession> {
+  return api.get<ChatSession>(`${CHATBOT_SESSION_ENDPOINT}/${sessionId}`);
+}
+
+/**
+ * Create a new chat session (only called when user explicitly clicks New Chat).
+ */
+export async function createSession(title?: string): Promise<ChatSession> {
+  const session = await api.post<ChatSession>(CHATBOT_SESSION_ENDPOINT, { title } as ChatSessionCreate);
+  localStorage.setItem("smartmeal_chatbot_session_id", session.id);
+  return session;
+}
+
+/**
+ * Rename a chat session.
+ */
+export async function renameSession(
+  sessionId: string,
+  title: string
+): Promise<ChatSession> {
+  return api.patch<ChatSession>(`${CHATBOT_SESSION_ENDPOINT}/${sessionId}`, {
+    title,
+  } as ChatSessionUpdate);
+}
+
+/**
+ * Soft delete a chat session.
+ */
+export async function deleteSession(sessionId: string): Promise<void> {
+  await api.delete(`${CHATBOT_SESSION_ENDPOINT}/${sessionId}`);
+  // Clear cached session if it was the deleted one
+  if (getCachedSessionId() === sessionId) {
+    localStorage.removeItem("smartmeal_chatbot_session_id");
+  }
+}
+
+/**
+ * Check if a session is stale (>24h since last activity).
+ */
+export async function checkStaleSession(sessionId: string): Promise<StaleSessionWarning> {
+  return api.get<StaleSessionWarning>(`${CHATBOT_SESSION_ENDPOINT}/${sessionId}/stale`);
+}
+
+// ─── Messages ─────────────────────────────────────────────────────────────────
+
+/**
+ * Fetch paginated messages for a session.
+ * Loads newest first, use before_id for infinite scroll upward.
+ */
+export async function fetchSessionMessages(
+  sessionId: string,
+  limit: number = 30,
+  beforeId?: string
+): Promise<ChatMessagesPaginated> {
+  const params = new URLSearchParams();
+  params.set("limit", String(limit));
+  if (beforeId) params.set("before_id", beforeId);
+
+  const response = await api.get<ChatMessagesPaginated>(
+    `${CHATBOT_MESSAGES_ENDPOINT(sessionId)}?${params.toString()}`
+  );
+
+  return {
+    items: response.items.map((msg) => ({
+      id: msg.id,
+      role: msg.role as "user" | "assistant",
+      content: msg.content,
+      timestamp: new Date(msg.created_at),
+    })),
+    has_more: response.has_more,
+    next_cursor: response.next_cursor,
+  };
+}
+
+// ─── Send message ─────────────────────────────────────────────────────────────
 
 export interface SendMessageOptions {
   signal?: AbortSignal;
@@ -121,39 +187,22 @@ export interface SendMessageOptions {
 export const chatbotService = {
   /**
    * Send a message and receive an AI reply.
-   *
-   * Internally:
-   * - Gets or creates a persistent chat session.
-   * - POSTs the message to the backend.
-   * - Backend builds user context, calls Groq AI, and returns both messages.
-   *
-   * @param content  The user's message text.
-   * @param options  AbortSignal for cancellation.
-   * @returns The assistant's ChatMessage reply.
    */
   async sendMessage(
+    sessionId: string,
     content: string,
     options?: SendMessageOptions
   ): Promise<ChatMessage> {
-    // Ensure we have a session
-    const session = await getOrCreateSession();
-
-    // Cache the session ID if not already cached
-    cacheSessionId(session.id);
-
-    const response = await api.post<SendMessageResponse>(
-      CHATBOT_MESSAGES_ENDPOINT(session.id),
+    const response = await api.post<{
+      user_message: { id: string; role: string; content: string; created_at: string };
+      assistant_message: { id: string; role: string; content: string; created_at: string };
+    }>(
+      CHATBOT_MESSAGES_ENDPOINT(sessionId),
       { content },
-      options?.signal
-        ? {
-            // Pass AbortSignal via custom config — axios needs adapter interceptors
-            signal: options.signal,
-          }
-        : undefined
+      options?.signal ? { signal: options.signal } : undefined
     );
 
     const assistantMsg = response.assistant_message;
-
     return {
       id: assistantMsg.id,
       role: assistantMsg.role as "user" | "assistant",
@@ -163,28 +212,57 @@ export const chatbotService = {
   },
 
   /**
-   * Restore messages from a previous session.
-   * Call this on initial load to show conversation history.
+   * Start a new chat session.
    */
-  async restoreMessages(): Promise<ChatMessage[]> {
-    const sessionId = getCachedSessionId();
-    if (!sessionId) return [];
-
-    try {
-      return await fetchSessionMessages(sessionId);
-    } catch {
-      return [];
-    }
+  async startNewSession(): Promise<ChatSession> {
+    return createSession();
   },
 
   /**
-   * Force-create a new session (clears cached session).
-   * Useful for "New conversation" button.
+   * Resume an existing session by loading its messages.
    */
-  async startNewSession(): Promise<ChatSessionResponse> {
-    if (typeof window !== "undefined") {
-      sessionStorage.removeItem(SESSION_CACHE_KEY);
-    }
-    return getOrCreateSession();
+  async resumeSession(sessionId: string): Promise<ChatMessage[]> {
+    const paginated = await fetchSessionMessages(sessionId);
+    // Return messages in chronological order (newest first for display)
+    return paginated.items.reverse();
+  },
+
+  /**
+   * Load more messages (for infinite scroll).
+   */
+  async loadMoreMessages(
+    sessionId: string,
+    beforeId: string
+  ): Promise<ChatMessagesPaginated> {
+    return fetchSessionMessages(sessionId, 30, beforeId);
   },
 };
+
+/**
+ * Convert a card response into a natural-language string for injection.
+ * (Used on frontend for logging/debugging if needed.)
+ */
+export function buildCardResponseText(card: ChatCard, response: ChatCardResponse): string {
+  switch (card.card_type) {
+    case "single_select": {
+      const selected = card.options?.find((o) => o.id === response.selected_ids?.[0]);
+      return `${card.title}: ${selected?.label ?? response.selected_ids?.[0]}`;
+    }
+    case "multi_select": {
+      const labels = response.selected_ids
+        ?.map((id) => card.options?.find((o) => o.id === id)?.label ?? id)
+        .join(", ");
+      return `${card.title}: ${labels}`;
+    }
+    case "rank": {
+      const ordered = response.ranked_ids
+        ?.map((id, i) => `${i + 1}. ${card.options?.find((o) => o.id === id)?.label ?? id}`)
+        .join(", ");
+      return `Thứ tự ưu tiên của tôi: ${ordered}`;
+    }
+    case "number_input":
+      return `${card.title}: ${response.number_value} ${card.unit ?? ""}`.trim();
+    case "confirm":
+      return response.confirmed ? `Có, ${card.subtitle ?? card.title}` : `Không`;
+  }
+}

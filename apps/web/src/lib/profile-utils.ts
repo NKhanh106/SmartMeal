@@ -138,7 +138,8 @@ export function apiGoalToForm(api: NutritionGoalResponse): GoalFormData {
     protein: Math.round(api.protein_target_g),
     carbs: Math.round(api.carb_target_g),
     fat: Math.round(api.fat_target_g),
-    water: 2.5, // backend does not track water; use default
+    // Convert ml to liters for the UI (form stores liters, backend stores ml)
+    water: api.hydration_goal_ml ? api.hydration_goal_ml / 1000 : 2.5,
     goalType: api.goal_type,
   };
 }
@@ -147,6 +148,7 @@ export function apiGoalToForm(api: NutritionGoalResponse): GoalFormData {
 export function formDataToGoalCreate(form: GoalFormData): NutritionGoalCreate {
   return {
     goal_type: form.goalType,
+    hydration_goal_ml: Math.round(form.water * 1000), // Convert liters to ml
     note: "",
   };
 }

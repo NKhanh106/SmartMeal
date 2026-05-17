@@ -87,10 +87,21 @@ async def preview_meal_from_image(
         uploaded_image_id = saved.id
         image_url = saved.url
         await db.commit()
-    except Exception:
-        # Image persistence failure should NOT break the preview
+    except (IOError, OSError) as exc:
+        # Non-critical: image persistence failure should NOT break the preview.
+        # Log and continue without image metadata.
         logger.warning(
-            "Failed to persist preview image for user %s, continuing without image.", user_id
+            "Image persistence failed for user %s (non-critical, continuing): %s",
+            user_id,
+            exc,
+        )
+    except Exception as exc:
+        # Unexpected error — log with full traceback but do NOT crash the preview.
+        logger.error(
+            "Unexpected error persisting preview image for user %s: %s",
+            user_id,
+            exc,
+            exc_info=True,
         )
 
     user_prompt = (

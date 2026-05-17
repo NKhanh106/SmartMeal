@@ -46,7 +46,48 @@ class ItemSourceType(str, enum.Enum):
     nguoi_dung_xac_nhan = "nguoi_dung_xac_nhan"
     nhap_thu_cong = "nhap_thu_cong"
 
+
+class MealLogSourceType(str, enum.Enum):
+    manual = "manual"
+    chat_extraction = "chat_extraction"
+    chat_command = "chat_command"
+
 class WorkoutDifficultyType(str, enum.Enum):
     nguoi_moi = "nguoi_moi"
     trung_binh = "trung_binh"
     nang_cao = "nang_cao"
+
+
+class UsageGoalEnum(str, enum.Enum):
+    muscle_gain = "muscle_gain"
+    weight_loss = "weight_loss"
+    weight_gain = "weight_gain"
+    maintain_shape = "maintain_shape"
+    nutrient_supplement = "nutrient_supplement"
+    medical_treatment = "medical_treatment"
+    balanced_lifestyle = "balanced_lifestyle"
+    sports_performance = "sports_performance"
+    pregnancy_nursing = "pregnancy_nursing"
+    elderly_nutrition = "elderly_nutrition"
+
+
+class SleepQualityEnum(str, enum.Enum):
+    poor = "poor"
+    fair = "fair"
+    good = "good"
+    excellent = "excellent"
+
+
+class MealFrequencyEnum(str, enum.Enum):
+    two_meals = "two_meals"
+    three_meals = "three_meals"
+    four_meals = "four_meals"
+    five_plus = "five_plus"
+    intermittent_fasting = "intermittent_fasting"
+
+
+class CookingPreferenceEnum(str, enum.Enum):
+    home_cooked = "home_cooked"
+    eat_out = "eat_out"
+    mixed = "mixed"
+    meal_prep = "meal_prep"

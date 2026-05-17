@@ -1,0 +1,547 @@
+"""
+Agent 5 — Web Researcher.
+
+Runs ON-DEMAND only — triggered by the orchestrator when the user asks
+for research-based information, latest findings, or fact-checking.
+
+Rate limiting: max 3 searches per user per day, tracked in agent_runs table.
+Results are cached in Redis for 24h (same query → cached result).
+
+Trusted sources:
+- Medical: who.int, pubmed.ncbi.nlm.nih.gov, vinmec.com, suckhoedoisong.vn, bacsidanang.vn
+- Nutrition: healthline.com, examine.com, nutritionfacts.org
+"""
+
+import hashlib
+import json
+import logging
+import re
+from datetime import datetime, timezone
+from typing import Any
+from uuid import uuid4
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.agents.base import AgentContext, AgentResult, BaseAgent
+from app.ai.circuit_breaker import groq_circuit
+from app.core.cache import cache_get, cache_set
+from app.core.config import settings
+from app.models.agent_run import AgentRun
+
+logger = logging.getLogger(__name__)
+
+# ── Trigger detection ─────────────────────────────────────────────────────────
+
+RESEARCH_TRIGGERS = [
+    "mới nhất",
+    "nghiên cứu",
+    "có thật không",
+    "khoa học nói",
+    "so sánh",
+    "review",
+    "tốt nhất hiện nay",
+    "bài báo",
+    "nghiên cứu cho thấy",
+    "theo nghiên cứu",
+    "y khoa",
+    "bằng chứng khoa học",
+    "evidence-based",
+    "is it safe",
+    "scientific evidence",
+    "newest",
+    "latest research",
+    "best supplement",
+]
+
+UNCONFIDENCE_FOOD_TRIGGERS = [
+    "supplement",
+    "vitamin",
+    "thực phẩm chức năng",
+    "thuốc bổ",
+    "probiotic",
+    "prebiotic",
+    "keto diet",
+    "intermittent fasting",
+    "carnivore",
+    "vegan diet",
+    "dash diet",
+    "mediterranean diet trend",
+    "new diet trend",
+    "ai làm gì",
+    "ai có thể",
+    "whey protein tốt nhất",
+]
+
+
+def should_trigger_web_research(message: str) -> bool:
+    """Return True if the user message warrants a web research agent."""
+    msg_lower = message.lower().strip()
+
+    # Keyword-based triggers
+    for trigger in RESEARCH_TRIGGERS:
+        if trigger.lower() in msg_lower:
+            return True
+
+    # Fact-checking pattern
+    if "có thật không" in msg_lower or "thật không" in msg_lower:
+        return True
+
+    return False
+
+
+def needs_low_confidence_research(message: str) -> bool:
+    """Return True if message mentions topics AI has low confidence about."""
+    msg_lower = message.lower()
+    return any(t in msg_lower for t in UNCONFIDENCE_FOOD_TRIGGERS)
+
+
+# ── Rate limiting helpers ───────────────────────────────────────────────────────
+
+WEB_RESEARCH_MAX_PER_DAY = 3
+_WEB_RESEARCH_TTL_SECONDS = 86400  # 24 hours
+
+
+async def count_agent_runs_today(
+    user_id: str,
+    agent_name: str,
+    db: AsyncSession,
+) -> int:
+    """Count how many times agent_name ran for this user today."""
+    today_start = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    result = await db.execute(
+        select(func.count(AgentRun.id))
+        .where(
+            AgentRun.user_id == user_id,
+            AgentRun.agent_name == agent_name,
+            AgentRun.status.in_(["completed", "failed"]),
+            AgentRun.created_at >= today_start,
+        )
+    )
+    return result.scalar() or 0
+
+
+# ── Search query generation ───────────────────────────────────────────────────
+
+RESEARCHER_SYSTEM_PROMPT = """Bạn là một chuyên gia nghiên cứu y khoa và dinh dưỡng.
+
+Nhiệm vụ: Chuyển đổi câu hỏi của người dùng thành một truy vấn tìm kiếm web tối ưu.
+
+QUY TẮC:
+1. Luôn dịch sang tiếng Anh cho web search
+2. Trọng tâm: dinh dưỡng, sức khỏe, y khoa
+3. Giữ truy vấn ngắn gọn (dưới 80 ký tự)
+4. KHÔNG thêm từ như "research", "study", "article" — chỉ cần từ khóa chính
+5. Tập trung vào khía cạnh khoa học, không phải thương mại
+
+Ví dụ:
+- "Phở bò có tốt không khi bị tiêu chảy?" → "pho beef diarrhea safe eat"
+- "Vitamin D có cần thiết không?" → "vitamin D health benefits evidence"
+- "Chế độ ăn keto có an toàn không?" → "ketogenic diet safety evidence"
+- "Probiotic tốt cho đường ruột không?" → "probiotics gut health scientific evidence"
+
+Trả lời CHỈ bằng truy vấn tìm kiếm, không có giải thích."""
+
+
+def _build_research_cache_key(user_id: str, query: str) -> str:
+    """Create a deterministic cache key for a web research query."""
+    h = hashlib.sha256(f"{user_id}:{query}".encode()).hexdigest()[:16]
+    return f"smartmeal:web_research:{h}"
+
+
+# ── Trusted sources ────────────────────────────────────────────────────────────
+
+TRUSTED_SOURCES = [
+    "who.int",
+    "healthline.com",
+    "pubmed.ncbi.nlm.nih.gov",
+    "vinmec.com",
+    "suckhoedoisong.vn",
+    "bacsidanang.vn",
+    "examine.com",
+    "nutritionfacts.org",
+    "cdc.gov",
+    "mayoclinic.org",
+    "nih.gov",
+    "webmd.com",
+    "medicalnewstoday.com",
+]
+
+# Source quality labels
+SOURCE_QUALITY = {
+    "pubmed.ncbi.nlm.nih.gov": {"label": "PubMed", "type": "academic", "tier": 1},
+    "who.int": {"label": "WHO", "type": "health_authority", "tier": 1},
+    "cdc.gov": {"label": "CDC", "type": "health_authority", "tier": 1},
+    "mayoclinic.org": {"label": "Mayo Clinic", "type": "hospital", "tier": 1},
+    "nih.gov": {"label": "NIH", "type": "health_authority", "tier": 1},
+    "vinmec.com": {"label": "Vinmec", "type": "hospital", "tier": 2},
+    "healthline.com": {"label": "Healthline", "type": "health_media", "tier": 2},
+    "medicalnewstoday.com": {"label": "Medical News Today", "type": "health_media", "tier": 2},
+    "examine.com": {"label": "Examine.com", "type": "nutrition_science", "tier": 2},
+    "nutritionfacts.org": {"label": "NutritionFacts.org", "type": "nutrition_media", "tier": 2},
+    "suckhoedoisong.vn": {"label": "Sức Khỏe Đời Sống", "type": "health_media", "tier": 3},
+    "bacsidanang.vn": {"label": "Bác Sĩ Đà Nẵng", "type": "health_media", "tier": 3},
+    "webmd.com": {"label": "WebMD", "type": "health_media", "tier": 3},
+}
+
+
+def _source_is_trusted(url: str) -> tuple[bool, str | None]:
+    """Check if a URL is from a trusted source. Returns (is_trusted, source_key)."""
+    url_lower = url.lower()
+    for source in TRUSTED_SOURCES:
+        if source in url_lower:
+            source_key = next(
+                (k for k in SOURCE_QUALITY if k in url_lower),
+                source,
+            )
+            return True, source_key
+    return False, None
+
+
+def _extract_domain(url: str) -> str:
+    """Extract clean domain from URL."""
+    match = re.search(r"https?://([^/]+)", url, re.IGNORECASE)
+    if match:
+        domain = match.group(1)
+        return domain.removeprefix("www.")
+    return url
+
+
+# ── Web Researcher Agent ───────────────────────────────────────────────────────
+
+FINDINGS_SCHEMA = """{
+  "findings": [
+    {
+      "source_name": "Tên nguồn hiển thị (tiếng Việt)",
+      "source_url": "https://...",
+      "source_type": "academic | health_authority | hospital | health_media | nutrition_media",
+      "key_finding": "Khám phá/claim chính từ nguồn (1-2 câu, tiếng Việt)",
+      "relevance_score": 0.0-1.0,
+      "date_published": "YYYY-MM-DD hoặc null"
+    }
+  ],
+  "search_summary": "Tóm tắt ngắn gọn 2-3 câu về những gì tìm thấy (tiếng Việt)",
+  "confidence": 0.0-1.0,
+  "limitations": "Hạn chế của nghiên cứu (1-2 câu) hoặc chuỗi rỗng",
+  "user_facing_summary": "1-2 câu tóm tắt thân thiện cho người dùng (tiếng Việt)"
+}"""
+
+
+class WebResearcherAgent(BaseAgent):
+    name = "web_researcher"
+
+    async def run(
+        self,
+        context: AgentContext,
+        db: AsyncSession,
+    ) -> AgentResult:
+        run = self._log_start(
+            context=context,
+            trigger="web_research_requested",
+            input_summary=context.current_message[:200],
+            db=db,
+        )
+
+        try:
+            # ── 1. Rate limit check ─────────────────────────────────────────────
+            user_id_str = str(context.user.id)
+            today_count = await count_agent_runs_today(
+                user_id=user_id_str,
+                agent_name=self.name,
+                db=db,
+            )
+
+            if today_count >= WEB_RESEARCH_MAX_PER_DAY:
+                result = AgentResult(
+                    agent_name=self.name,
+                    success=True,
+                    insight_type="web_research",
+                    content={"findings": [], "rate_limited": True},
+                    confidence=1.0,
+                    priority=10,
+                    text_for_orchestrator=(
+                        "⚠️ Bạn đã sử dụng hết 3 lượt tra cứu web hôm nay. "
+                        "Vui lòng quay lại vào ngày mai."
+                    ),
+                    memory_updates={},
+                )
+                await self._log_complete(run, result, db, output_summary="Rate limited")
+                return result
+
+            # ── 2. Generate search query ─────────────────────────────────────────
+            search_query = await self._generate_search_query(context.current_message)
+
+            # ── 3. Check Redis cache ───────────────────────────────────────────
+            cache_key = _build_research_cache_key(user_id_str, search_query)
+            cached = await cache_get(cache_key)
+            if cached:
+                result = AgentResult(
+                    agent_name=self.name,
+                    success=True,
+                    insight_type="web_research",
+                    content=cached,
+                    confidence=cached.get("confidence", 0.5),
+                    priority=7,
+                    text_for_orchestrator=self._build_text_for_orchestrator(cached),
+                    memory_updates={},
+                )
+                await self._log_complete(run, result, db, output_summary="Served from cache")
+                return result
+
+            # ── 4. Execute web search ───────────────────────────────────────────
+            raw_results = await self._execute_web_search(search_query, context.current_message)
+
+            if not raw_results:
+                result = AgentResult(
+                    agent_name=self.name,
+                    success=True,
+                    insight_type="web_research",
+                    content={"findings": [], "no_results": True},
+                    confidence=0.0,
+                    priority=7,
+                    text_for_orchestrator=(
+                        "Mình không tìm thấy thông tin cụ thể về chủ đề này. "
+                        "Bạn có thể hỏi cụ thể hơn không?"
+                    ),
+                    memory_updates={},
+                )
+                await self._log_complete(run, result, db, output_summary="No results found")
+                return result
+
+            # ── 5. Filter to trusted sources ────────────────────────────────────
+            filtered = self._filter_trusted_sources(raw_results)
+
+            if not filtered:
+                result = AgentResult(
+                    agent_name=self.name,
+                    success=True,
+                    insight_type="web_research",
+                    content={"findings": [], "no_trusted_results": True},
+                    confidence=0.1,
+                    priority=7,
+                    text_for_orchestrator=(
+                        "Không tìm thấy kết quả từ các nguồn đáng tin cậy. "
+                        "Mình khuyên bạn nên tham khảo ý kiến bác sĩ."
+                    ),
+                    memory_updates={},
+                )
+                await self._log_complete(run, result, db, output_summary="No trusted sources found")
+                return result
+
+            # ── 6. Build structured output ──────────────────────────────────────
+            research_output = {
+                "findings": filtered[:3],  # max 3 sources
+                "search_query_used": search_query,
+                "search_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            }
+
+            # ── 7. Cache result ────────────────────────────────────────────────
+            await cache_set(cache_key, research_output, _WEB_RESEARCH_TTL_SECONDS)
+
+            result = AgentResult(
+                agent_name=self.name,
+                success=True,
+                insight_type="web_research",
+                content=research_output,
+                confidence=0.75,
+                priority=6,
+                text_for_orchestrator=self._build_text_for_orchestrator(research_output),
+                memory_updates={},
+            )
+            await self._log_complete(run, result, db, output_summary=search_query)
+            return result
+
+        except Exception as exc:
+            logger.error("WebResearcherAgent: unexpected error: %s", exc, exc_info=True)
+            await self._log_complete(run, AgentResult(
+                agent_name=self.name,
+                success=False,
+                insight_type="web_research",
+                content={},
+                confidence=0.0,
+                priority=5,
+                memory_updates={},
+                error=str(exc),
+            ), db)
+            return AgentResult(
+                agent_name=self.name,
+                success=False,
+                insight_type="web_research",
+                content={},
+                confidence=0.0,
+                priority=5,
+                memory_updates={},
+                error=str(exc),
+            )
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    async def _generate_search_query(self, user_message: str) -> str:
+        """Use AI to distill user question into an optimal web search query."""
+        try:
+            raw = await self._call_ai(
+                system_prompt=RESEARCHER_SYSTEM_PROMPT,
+                user_prompt=f"Câu hỏi: {user_message}\n\nTruy vấn tìm kiếm tối ưu (chỉ 1 dòng, không giải thích):",
+                response_format="text",
+                max_tokens=80,
+                model=settings.GROQ_TEXT_MODEL,
+            )
+            return str(raw).strip()
+        except Exception as exc:
+            logger.warning("WebResearcherAgent: query generation failed: %s", exc)
+            # Fallback: strip common words and return remaining keywords
+            stopwords = {
+                "bạn", "của", "có", "không", "là", "mình", "với", "và",
+                "tôi", "cho", "được", "hay", "thì", "nên", "hay", "muốn",
+            }
+            words = user_message.lower().split()
+            keywords = [w for w in words if w not in stopwords and len(w) > 3]
+            return " ".join(keywords[:8])
+
+    async def _execute_web_search(
+        self,
+        query: str,
+        original_question: str,
+    ) -> list[dict[str, Any]]:
+        """
+        Execute a web search using the Groq AI with web search tool.
+        Returns raw search results.
+        """
+        if not settings.GROQ_API_KEY:
+            logger.warning("WebResearcherAgent: GROQ_API_KEY not set, returning empty results")
+            return []
+
+        try:
+            from app.agents.base import _get_groq_client
+            import asyncio
+
+            client = _get_groq_client()
+
+            # Build a research-focused prompt
+            system_prompt = (
+                "Bạn là một trợ lý nghiên cứu y khoa. "
+                "Tìm kiếm thông tin khoa học về câu hỏi của người dùng. "
+                "LUÔN trả lời bằng JSON theo đúng schema."
+                "Nếu không tìm được thông tin, trả về JSON rỗng: {\"findings\": []}."
+                f"Schema:\n{FINDINGS_SCHEMA}"
+            )
+
+            user_prompt = (
+                f"Câu hỏi gốc: {original_question}\n\n"
+                f"Truy vấn tìm kiếm: {query}\n\n"
+                f"Thực hiện tìm kiếm web và trả kết quả theo schema:\n{FINDINGS_SCHEMA}\n\n"
+                "QUY TẮC QUAN TRỌNG:\n"
+                "- Chỉ bao gồm nguồn từ: who.int, healthline.com, pubmed.ncbi.nlm.nih.gov, "
+                "vinmec.com, suckhoedoisong.vn, bacsidanang.vn, examine.com, nutritionfacts.org, "
+                "cdc.gov, mayoclinic.org, nih.gov, medicalnewstoday.com\n"
+                "- Nếu không có kết quả từ nguồn đáng tin cậy, trả về {\"findings\": []}\n"
+                "- key_finding phải bằng tiếng Việt\n"
+                "- Mỗi nguồn chỉ chọn 1 key_finding quan trọng nhất\n"
+                "- Nếu câu hỏi không liên quan đến y tế/dinh dưỡng, trả về {\"findings\": []}"
+            )
+
+            import time
+            start = time.perf_counter()
+
+            async def _do_search():
+                return await client.chat.completions.create(
+                    model=settings.GROQ_TEXT_MODEL,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    max_tokens=1024,
+                    temperature=0.2,
+                )
+
+            async with asyncio.timeout(30):
+                response = await groq_circuit.call(_do_search)
+
+            self._last_usage = {
+                "input_tokens": response.usage.prompt_tokens if response.usage else None,
+                "output_tokens": response.usage.completion_tokens if response.usage else None,
+                "latency_ms": int((time.perf_counter() - start) * 1000),
+                "model": settings.GROQ_TEXT_MODEL,
+            }
+
+            raw_text = response.choices[0].message.content or ""
+
+            # Try to parse as JSON
+            try:
+                # Strip markdown code blocks if present
+                cleaned = raw_text.strip()
+                if cleaned.startswith("```"):
+                    lines = cleaned.splitlines()
+                    cleaned = "\n".join(lines[1:-1] if lines[-1] == "```" else lines[1:])
+                data = json.loads(cleaned)
+                findings = data.get("findings") or []
+                if findings:
+                    # Add the search summary and confidence to each finding
+                    for f in findings:
+                        f["search_summary"] = data.get("search_summary", "")
+                        f["overall_confidence"] = data.get("confidence", 0.5)
+                    return findings
+                return []
+            except json.JSONDecodeError:
+                logger.warning("WebResearcherAgent: failed to parse JSON response: %s", raw_text[:200])
+                return []
+
+        except Exception as exc:
+            logger.error("WebResearcherAgent: search execution failed: %s", exc, exc_info=True)
+            return []
+
+    def _filter_trusted_sources(
+        self,
+        findings: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Filter and enrich findings to only include trusted sources."""
+        filtered = []
+        for finding in findings:
+            url = finding.get("source_url", "")
+            is_trusted, source_key = _source_is_trusted(url)
+
+            if not is_trusted:
+                continue
+
+            # Enrich with source quality metadata
+            quality = SOURCE_QUALITY.get(source_key, {})
+            domain = _extract_domain(url)
+
+            enriched = {
+                "source_name": finding.get("source_name") or quality.get("label", domain),
+                "source_url": url,
+                "source_domain": domain,
+                "source_type": quality.get("type", "unknown"),
+                "source_tier": quality.get("tier", 3),
+                "key_finding": finding.get("key_finding", ""),
+                "relevance_score": float(finding.get("relevance_score", 0.5)),
+                "date_published": finding.get("date_published"),
+                "search_summary": finding.get("search_summary", ""),
+                "overall_confidence": float(finding.get("overall_confidence", 0.5)),
+            }
+            filtered.append(enriched)
+
+        # Sort by tier (lower = better), then by relevance
+        filtered.sort(key=lambda f: (f["source_tier"], -f["relevance_score"]))
+        return filtered
+
+    def _build_text_for_orchestrator(self, content: dict[str, Any]) -> str:
+        """Build a natural-language summary from research findings for the orchestrator."""
+        findings = content.get("findings") or []
+        if not findings:
+            return ""
+
+        parts = []
+        for f in findings[:3]:
+            source = f.get("source_name", "Nguồn")
+            finding = f.get("key_finding", "")
+            if finding:
+                parts.append(f"[{source}] {finding}")
+
+        if not parts:
+            return ""
+
+        summary = "\n".join(parts)
+        return f"🔍 Kết quả nghiên cứu web:\n{summary}"

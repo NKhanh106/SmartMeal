@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -23,9 +24,7 @@ import { Flame, Droplet, Utensils } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 
-// TODO (backend): Implement PUT /nutrition-goals/{goal_id} for partial updates.
-// Currently backend only supports POST /nutrition-goals/ (create new, deactivate old).
-// The flow below creates a new goal on every save.
+// Hydration goal is now persisted via the backend hydration_goal_ml field.
 
 const GOAL_TYPE_OPTIONS: { value: NutritionGoalType; label: string }[] = [
   { value: "giam_can", label: "Weight Loss (Giảm cân)" },
@@ -34,6 +33,14 @@ const GOAL_TYPE_OPTIONS: { value: NutritionGoalType; label: string }[] = [
 ];
 
 export default function GoalsPage() {
+  return (
+    <ErrorBoundary>
+      <GoalsPageInner />
+    </ErrorBoundary>
+  );
+}
+
+function GoalsPageInner() {
   const { toast } = useToast();
 
   // ── State ──────────────────────────────────────────────────────────────────
@@ -63,8 +70,8 @@ export default function GoalsPage() {
       setExistingGoal(goal);
       setFormData(apiGoalToForm(goal));
     } catch (err) {
-      const axiosErr = err as { response?: { status?: number }; message?: string };
-      const statusCode = axiosErr.response?.status ?? 0;
+      const axiosErr = err as { statusCode?: number; response?: { status?: number }; message?: string };
+      const statusCode = axiosErr.statusCode ?? axiosErr.response?.status ?? 0;
       if (statusCode === 404) {
         setExistingGoal(null);
       } else {
@@ -81,8 +88,8 @@ export default function GoalsPage() {
       await profileService.getMyProfile();
       setHasProfile(true);
     } catch (err) {
-      const axiosErr = err as { response?: { status?: number }; message?: string };
-      const statusCode = axiosErr.response?.status ?? 0;
+      const axiosErr = err as { statusCode?: number; response?: { status?: number }; message?: string };
+      const statusCode = axiosErr.statusCode ?? axiosErr.response?.status ?? 0;
       if (statusCode === 404) {
         setHasProfile(false);
       } else {
@@ -108,8 +115,8 @@ export default function GoalsPage() {
       setFormData((prev) => apiCalculationToForm(result, prev.goalType, prev.water));
       toast({ title: "Preview calculated successfully." });
     } catch (err) {
-      const axiosErr = err as { response?: { status?: number }; message?: string };
-      const statusCode = axiosErr.response?.status ?? 0;
+      const axiosErr = err as { statusCode?: number; response?: { status?: number }; message?: string };
+      const statusCode = axiosErr.statusCode ?? axiosErr.response?.status ?? 0;
       if (statusCode === 404) {
         toast({
           title: "Profile required.",
@@ -128,18 +135,29 @@ export default function GoalsPage() {
     }
   };
 
-  // ── Save goal (POST /) ────────────────────────────────────────────────────
+  // ── Save goal (PUT if existing active goal, POST to create if new) ────────────────
   const handleSave = async () => {
     setSubmitting(true);
     setFetchError(null);
     try {
-      const created = await nutritionGoalService.createGoal(
-        formDataToGoalCreate(formData)
-      );
-      setExistingGoal(created);
-      setFormData(apiGoalToForm(created));
-      setPreviewData(null);
-      toast({ title: "Nutrition goals saved successfully." });
+      if (existingGoal) {
+        // Partial update preserves existing goal and updates in place
+        const updated = await nutritionGoalService.updateGoal(existingGoal.id, {
+          hydration_goal_ml: Math.round(formData.water * 1000),
+        });
+        setExistingGoal(updated);
+        setFormData(apiGoalToForm(updated));
+        toast({ title: "Nutrition goals updated successfully." });
+      } else {
+        // Create new goal (deactivates any prior active goal)
+        const created = await nutritionGoalService.createGoal(
+          formDataToGoalCreate(formData)
+        );
+        setExistingGoal(created);
+        setFormData(apiGoalToForm(created));
+        setPreviewData(null);
+        toast({ title: "Nutrition goals saved successfully." });
+      }
     } catch (err) {
       toast({
         title: "Failed to save goals.",
@@ -162,8 +180,8 @@ export default function GoalsPage() {
       setPreviewData(result);
       setFormData((prev) => apiCalculationToForm(result, goalType, prev.water));
     } catch (err) {
-      const axiosErr = err as { response?: { status?: number }; message?: string };
-      const statusCode = axiosErr.response?.status ?? 0;
+      const axiosErr = err as { statusCode?: number; response?: { status?: number }; message?: string };
+      const statusCode = axiosErr.statusCode ?? axiosErr.response?.status ?? 0;
       if (statusCode === 404) {
         toast({
           title: "Profile required.",
@@ -387,7 +405,7 @@ export default function GoalsPage() {
               Hydration Goal
             </CardTitle>
             <CardDescription>
-              Minimum daily water intake recommended. (Not stored on server)
+              Minimum daily water intake target.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">

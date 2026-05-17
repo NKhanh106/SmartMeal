@@ -43,7 +43,7 @@ export function ChatInput({ value, onChange, onSend, disabled }: ChatInputProps)
         <textarea
           ref={textareaRef}
           rows={1}
-          className="flex-1 border-none bg-transparent focus-visible:ring-0 shadow-none h-10 px-3 text-sm resize-none placeholder:text-slate-400"
+          className="flex-1 border-none bg-transparent focus-visible:ring-0 focus-visible:outline-none shadow-none h-10 px-3 text-sm resize-none placeholder:text-slate-400"
           placeholder="Nhập yêu cầu của bạn..."
           value={localValue}
           onChange={(e) => {

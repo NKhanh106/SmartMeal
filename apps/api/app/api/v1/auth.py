@@ -1,24 +1,29 @@
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
+from jose import jwt
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.core.rate_limiter import limiter
 from app.core.config import settings
-from app.core.security import create_access_token, create_refresh_token, get_password_hash, verify_password
+from app.core.security import ALGORITHM, create_access_token, create_refresh_token, get_password_hash, verify_password
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.token import Token
-from app.schemas.user import UserCreate, UserResponse
+from app.schemas.user import UserCreate, UserResponse, UserUpdate
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
 @router.post("/login", response_model=Token)
+@limiter.limit("10/minute")
 async def login_access_token(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     form_data: OAuth2PasswordRequestForm = Depends(),
 ):
@@ -64,7 +69,9 @@ async def login_access_token(
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("5/minute")
 async def register_user(
+    request: Request,
     user_in: UserCreate,
     db: AsyncSession = Depends(get_db),
 ):
@@ -103,8 +110,38 @@ async def get_current_user_info(
     return current_user
 
 
+@router.patch("/me", response_model=UserResponse)
+async def update_current_user(
+    user_update: UserUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Update the current user's profile. Only full_name can be updated here.
+    For extended profile data (age, gender, health conditions, etc.) use the
+    /api/v1/profiles endpoint.
+    """
+    update_data = user_update.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(current_user, field, value)
+
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Could not update user profile.",
+        )
+
+    await db.refresh(current_user)
+    return current_user
+
+
 @router.post("/refresh")
+@limiter.limit("30/minute")
 async def refresh_access_token(
+    request: Request,
     refresh_token: str,
     db: AsyncSession = Depends(get_db),
 ):

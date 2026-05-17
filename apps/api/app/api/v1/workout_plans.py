@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import ensure_user_access, get_current_user
 from app.db.session import get_db
+from app.models import Exercise
 from app.models.nutrition_goal import NutritionGoal
 from app.models.user import User
 from app.models.user_profile import UserProfile
@@ -19,9 +20,57 @@ from app.schemas.workout import (
     WorkoutPlanUpdate,
     WorkoutPlanWithItemsCreate,
 )
+from app.schemas.exercise import ExerciseResponse
 from app.services import workout_service as service
 
 router = APIRouter(prefix="/workout-plans", tags=["Workout Plans"])
+
+# ─── Exercise Library ─────────────────────────────────────────────────────────
+
+@router.get("/exercises", response_model=list[ExerciseResponse])
+async def get_exercises(
+    category: str | None = None,
+    difficulty: str | None = None,
+    muscle_group: str | None = None,
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Fetch exercises from the exercise library (stored in DB, not hardcoded).
+    Supports filtering by category, difficulty, and muscle group.
+    Seed data with: python -m app.db.seeds.seed_exercises
+    """
+    query = select(Exercise).where(Exercise.is_active == True)
+    if category:
+        query = query.where(Exercise.category == category)
+    if difficulty:
+        query = query.where(Exercise.difficulty == difficulty)
+    if muscle_group:
+        query = query.where(Exercise.muscle_group.ilike(f"%{muscle_group}%"))
+
+    query = query.order_by(Exercise.name).limit(limit).offset(offset)
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+# ─── Workout parameter constants ───────────────────────────────────────────────
+
+SETS_BEGINNER = 3
+SETS_INTERMEDIATE = 4
+
+REPS_STRENGTH = 8
+REPS_HYPERTROPHY = 10
+REPS_ENDURANCE = 12
+REPS_CALISTHENICS = 15
+REPS_CARDIO = 20
+REPS_JUMPING = 30
+REPS_PLANK = 45
+
+REST_SHORT = 45
+REST_MEDIUM = 60
+REST_LONG = 75
+REST_MAX = 90
 
 # ─── Auto-generate exercises based on goal type ────────────────────────────────
 
