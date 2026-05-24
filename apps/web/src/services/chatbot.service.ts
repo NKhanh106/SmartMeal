@@ -11,7 +11,6 @@
 
 import { api } from "@/lib/api-client";
 import type { ChatMessage, ChatSession, ChatMessagesPaginated, StaleSessionWarning } from "@/components/chatbot/types";
-import type { ChatCard, ChatCardResponse } from "@/components/chat/types";
 
 const CHATBOT_SESSION_ENDPOINT = "/api/v1/ai/chat/sessions";
 const CHATBOT_MESSAGES_ENDPOINT = (sessionId: string) =>
@@ -171,7 +170,7 @@ export async function fetchSessionMessages(
       id: msg.id,
       role: msg.role as "user" | "assistant",
       content: msg.content,
-      timestamp: new Date(msg.created_at),
+      timestamp: new Date(msg.created_at ?? new Date().toISOString()),
     })),
     has_more: response.has_more,
     next_cursor: response.next_cursor,
@@ -237,32 +236,3 @@ export const chatbotService = {
     return fetchSessionMessages(sessionId, 30, beforeId);
   },
 };
-
-/**
- * Convert a card response into a natural-language string for injection.
- * (Used on frontend for logging/debugging if needed.)
- */
-export function buildCardResponseText(card: ChatCard, response: ChatCardResponse): string {
-  switch (card.card_type) {
-    case "single_select": {
-      const selected = card.options?.find((o) => o.id === response.selected_ids?.[0]);
-      return `${card.title}: ${selected?.label ?? response.selected_ids?.[0]}`;
-    }
-    case "multi_select": {
-      const labels = response.selected_ids
-        ?.map((id) => card.options?.find((o) => o.id === id)?.label ?? id)
-        .join(", ");
-      return `${card.title}: ${labels}`;
-    }
-    case "rank": {
-      const ordered = response.ranked_ids
-        ?.map((id, i) => `${i + 1}. ${card.options?.find((o) => o.id === id)?.label ?? id}`)
-        .join(", ");
-      return `Thứ tự ưu tiên của tôi: ${ordered}`;
-    }
-    case "number_input":
-      return `${card.title}: ${response.number_value} ${card.unit ?? ""}`.trim();
-    case "confirm":
-      return response.confirmed ? `Có, ${card.subtitle ?? card.title}` : `Không`;
-  }
-}

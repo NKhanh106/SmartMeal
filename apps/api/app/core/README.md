@@ -1,152 +1,144 @@
-# Thư mục `core/` — Cấu hình Ứng dụng & Bảo mật
+# Core Infrastructure
 
-## Mục đích
+Supporting modules used across the entire API. These are the foundation everything runs on.
 
-Chứa các thành phần **cốt lõi** của backend SmartMeal: cấu hình ứng dụng, bảo mật, cache, và rate limiting. Đây là nơi đặt tất cả các thiết lập toàn cục không nên hard-code ở nơi khác.
+## Modules
 
-## Các thành phần
+### config.py — Settings Management
 
-### 1. `config.py` — Cấu hình Ứng dụng (Pydantic Settings)
+Pydantic `BaseSettings` reads all configuration from environment variables. Supports `.env` file loading via `python-dotenv`.
 
-Đọc biến môi trường từ file `.env` và cung cấp typed settings cho toàn bộ ứng dụng.
+Key settings:
 
 ```python
-from pydantic_settings import BaseSettings, SettingsConfigDict
-
-class Settings(BaseSettings):
-    PROJECT_NAME: str = "SmartMeal API"
-    VERSION: str = "0.1.0"
-    DATABASE_URL: str = ""
-    SECRET_KEY: str = "dev-only-change-me"
-    AI_MEAL_PROVIDER: str = "gemini"
-    GEMINI_API_KEY: str | None = None
-    REDIS_URL: str = "redis://localhost:6379/0"
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        case_sensitive=True,
-        extra="ignore",
-    )
+DATABASE_URL: PostgreSQL connection string (URL-encoded password supported)
+REDIS_URL: redis:// connection string
+SECRET_KEY: JWT signing key (must be 32+ chars in production)
+GROQ_API_KEY: Groq API key
+GEMINI_API_KEY: Google Gemini API key
+ENVIRONMENT: development | production
+AI_PROVIDER: gemini | groq  (which provider to use for meal-related AI)
+DEFAULT_AI_PROVIDER: groq  (chat + general AI)
+VISION_AI_PROVIDER: gemini  (image analysis)
 ```
 
-**Tính năng quan trọng:**
-- Auto-detect file `.env` ở thư mục `apps/api/` hoặc root
-- Production validator: từ chối chạy nếu `SECRET_KEY` yếu ở production
-- Computed field `ASYNC_DATABASE_URL`: tự động thêm prefix `postgresql+asyncpg://` cho async driver
-- Cache TTL settings: `AI_CACHE_TTL_SECONDS`, `FOOD_RECOGNITION_CACHE_TTL`, `DAILY_PLAN_CACHE_TTL`
-- Image retention settings: ngày tự xóa ảnh theo loại (meal: 7d, temporary: 1d, progress: NULL/never)
+In production, `SECRET_KEY` must be at least 32 characters. The app raises a warning if it's shorter.
 
-### 2. `security.py` — Bảo mật (JWT & Password)
+### security.py — Authentication
 
-Các hàm helper cho xác thực:
+JWT access + refresh token implementation:
 
 ```python
-from app.core.security import create_access_token, verify_password, get_password_hash
-
-# Tạo JWT access token (mặc định 24h)
-token = create_access_token(user_id)
-
-# Tạo refresh token (7 ngày)
-refresh_token = create_refresh_token(user_id)
-
-# Hash & verify password (bcrypt)
-hashed = get_password_hash("MyPassword123")
-verify_password("MyPassword123", hashed)  # → True
+create_access_token(data: dict)  → signed JWT (24h default)
+create_refresh_token(user_id)     → signed JWT (7d)
+verify_password(plain, hashed)    → bool (bcrypt)
+hash_password(plain)             → str
+get_password_hash()              → str (for registration)
 ```
 
-**Thuật toán**: HS256 với JWT (python-jose)
-**Password hashing**: Bcrypt qua passlib
+Brute-force protection: tracks failed login attempts per email in Redis. After 5 failures within 5 minutes, the account is locked for 5 minutes. Successful login clears the counter.
 
-### 3. `cache.py` — Redis Cache
+### brute_force.py — Login Protection
 
-Wrapper async cho Redis với fail-graceful design:
+Redis-backed failed attempt tracking.
 
 ```python
-from app.core.cache import cache_get, cache_set, cache_delete, make_cache_key, make_image_cache_key
-
-# Cache key cho food recognition (hash ảnh → không nhận diện lại)
-key = make_image_cache_key(image_bytes)
-
-# Lấy từ cache
-cached = await cache_get(key)
-
-# Lưu vào cache với TTL
-await cache_set(key, data, ttl=86400)  # 24h
-
-# Xóa cache
-await cache_delete(key)
+record_failed_login(email: str)  → increments counter, sets 5-min TTL
+check_login_attempts(email: str) → bool (True = locked out)
+clear_failed_logins(email: str) → called on successful login
 ```
 
-**Đặc điểm:**
-- Fail-graceful: nếu Redis down, app vẫn chạy không crash
-- Image cache key: SHA256 hash của bytes → tránh nhận diện cùng 1 ảnh 2 lần
-- TTL từ config: `FOOD_RECOGNITION_CACHE_TTL` (24h), `AI_CACHE_TTL_SECONDS` (1h), `DAILY_PLAN_CACHE_TTL` (12h)
+### rate_limiter.py — Request Rate Limiting
 
-### 4. `rate_limiter.py` — Rate Limiting
-
-Dùng `slowapi` để giới hạn số request:
+SlowAPI integration with Redis-backed storage for distributed rate limiting.
 
 ```python
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=get_real_ip)
 ```
 
-Áp dụng rate limit cho endpoint cụ thể:
+`get_real_ip` handles the `X-Forwarded-For` header for deployments behind proxies. Rate limits are defined per-endpoint in route decorators:
 
 ```python
-@router.post("/recognize-image")
-@limiter.limit("10/minute")  # Tối đa 10 request/phút
-async def recognize_meal_image(...):
+@router.post("/login", dependencies=[Depends(rate_limit("10/minute"))])
+```
+
+### circuit_breaker.py — AI Provider Resilience
+
+State machine preventing cascade failures when AI providers are down.
+
+```
+CLOSED ──(5 failures)──→ OPEN ──(60s)──→ HALF_OPEN ──(success)──→ CLOSED
+                              │
+                              └───(failure)──→ OPEN (reset timer)
+```
+
+When OPEN, AI calls return an error immediately without making the network request. After 60 seconds, the breaker moves to HALF_OPEN and allows one test request. If it succeeds, the breaker closes; if it fails, it opens again.
+
+### cache.py — Redis Caching
+
+```python
+@cache_response(ttl=3600, prefix="chat")
+async def get_cached_response(...):
     ...
 ```
 
-## Environment Variables
+Cache TTLs by data type:
+- AI chat responses: 1 hour
+- Daily meal plans: 12 hours
+- Food recognition: 24 hours
+- User profiles: 30 minutes
 
-Tất cả biến môi trường được định nghĩa trong `config.py`. File `.env.example` ở root và `apps/api/.env.example` chứa template đầy đủ.
-
-```env
-# Database
-DATABASE_URL=postgresql://postgres:password@localhost:5432/smartmeal
-
-# Security
-SECRET_KEY=your-super-secret-key-here
-
-# AI Providers
-GEMINI_API_KEY=your-google-api-key
-GROQ_API_KEY=your-groq-api-key
-
-# Redis
-REDIS_URL=redis://localhost:6379/0
-
-# CORS
-BACKEND_CORS_ORIGINS=["http://localhost:3000"]
-```
-
-## Production Security Checks
-
-`config.py` tự động từ chối chạy production nếu:
-- `SECRET_KEY` vẫn là giá trị mặc định dev
-- `SECRET_KEY` ngắn hơn 32 ký tự
-- `POSTGRES_PASSWORD` vẫn là giá trị mặc định
-- CORS origins chứa wildcard `*` khi `allow_credentials=True`
-
-## CORS Configuration
+Graceful degradation: if Redis is unavailable, the app continues without caching and logs a warning. No errors are raised.
 
 ```python
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[str(origin).rstrip("/") for origin in settings.BACKEND_CORS_ORIGINS],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+await cache_close()  # Called on shutdown
 ```
 
-## Best Practices
+### errors.py — Standardized Error Responses
 
-- **KHÔNG** hard-code secret key hoặc API keys trong code
-- Luôn tạo `.env` từ `.env.example`
-- Trong production, sinh SECRET_KEY bằng: `python -c "import secrets; print(secrets.token_urlsafe(64))"`
-- Redis nên được setup ở production để tận dụng cache và tránh gọi AI trùng lặp
+Factory methods for consistent HTTP error responses:
+
+```python
+AppError.bad_request("Invalid input", code="INVALID_CALORIES")
+AppError.not_found("Meal log not found")
+AppError.forbidden("Admin access required")
+AppError.unauthorized("Invalid or expired token")
+```
+
+All map to appropriate HTTP status codes with a consistent JSON shape.
+
+### sanitize.py — Input Sanitization
+
+Prompt injection prevention for AI inputs. Detects and removes:
+
+- Markdown code blocks (prevents prompt injection via formatted input)
+- HTML tags
+- Excessive whitespace
+- Control characters
+
+Applied at the orchestrator entry point before any AI call. Vietnamese text is handled correctly (Unicode-aware).
+
+### token_budget.py — AI Token Management
+
+Vietnamese-aware token estimation (approximately 3 characters per token for Vietnamese text, vs 4 for English):
+
+```python
+estimate_tokens(text: str) → int
+
+def build_context_within_budget(
+    sections: list[tuple[label, content, priority]],
+    max_tokens: int
+) → str:
+    # Fills budget with highest-priority sections first
+    # Drops lowest-priority sections if over budget
+```
+
+Used by the orchestrator to build the synthesis context within the AI model's context window.
+
+### audit_log.py — Audit Trail
+
+Structured logging of sensitive operations (login, logout, profile changes). Logs include user ID, action, IP address, and timestamp in JSON format.
+
+### logging_config.py — Production Logging
+
+Sets up structured JSON logging for production (`ENVIRONMENT=production`). Includes request ID middleware for tracing.

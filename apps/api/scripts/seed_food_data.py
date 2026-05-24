@@ -15,8 +15,11 @@ with authoritative sources (USDA, Vietnamese food composition tables).
 """
 
 import asyncio
+import logging
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Add project root to path so we can import app modules
 project_root = Path(__file__).resolve().parents[1]
@@ -27,6 +30,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # no
 
 from app.core.config import settings  # noqa: E402
 from app.models.enums import FoodSourceType  # noqa: E402
+
+
+def _build_engine():
+    return create_async_engine(settings.ASYNC_DATABASE_URL, echo=False)
 
 # ─── Seed data ────────────────────────────────────────────────────────────────
 # Format: (food_name, food_name_vi, food_name_en, category, serving_size_g,
@@ -133,14 +140,14 @@ VIETNAMESE_FOODS = [
 
 async def seed_food_data():
     """Insert seed foods into the food_nutrition table."""
-    engine = create_async_engine(settings.ASYNC_DATABASE_URL, echo=False)
+    engine = _build_engine()
     async_session = async_sessionmaker(engine, expire_on_commit=False)
 
     async with async_session() as session:
         # Check how many foods already exist
         count_result = await session.execute(text("SELECT COUNT(*) FROM food_nutrition"))
         existing_count = count_result.scalar()
-        print(f"[Seed] Current food_nutrition count: {existing_count}")
+        logger.info("[Seed] Current food_nutrition count: %s", existing_count)
 
         # Upsert each food — idempotent
         inserted = 0
@@ -194,26 +201,28 @@ async def seed_food_data():
 
         final_count_result = await session.execute(text("SELECT COUNT(*) FROM food_nutrition"))
         final_count = final_count_result.scalar()
-        print(f"[Seed] Done. Inserted: {inserted}, Skipped (already existed): {skipped}")
-        print(f"[Seed] New total count: {final_count}")
+        logger.info("[Seed] Done. Inserted: %d, Skipped (already existed): %d", inserted, skipped)
+        logger.info("[Seed] New total count: %s", final_count)
 
     await engine.dispose()
 
 
 def main():
-    print("=" * 60)
-    print("SmartMeal Food Nutrition Seed Script")
-    print("NOTE: All nutrition values are SAMPLE ESTIMATES for demo.")
-    print("=" * 60)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+    logger.info("SmartMeal Food Nutrition Seed Script (idempotent)")
+    logger.info("NOTE: All nutrition values are SAMPLE ESTIMATES for demo.")
 
     env = settings.ENVIRONMENT.lower()
     if env in {"production", "prod"}:
-        print("ERROR: Refusing to run seed in production mode.")
-        print("Set ENVIRONMENT=development in your .env to run seeds.")
+        logger.error("Refusing to run seed in production mode.")
+        logger.error("Set ENVIRONMENT=development in your .env to run seeds.")
         sys.exit(1)
 
     asyncio.run(seed_food_data())
-    print("[Seed] Complete.")
+    logger.info("[Seed] Complete.")
 
 
 if __name__ == "__main__":

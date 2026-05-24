@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Disable ESLint during builds (CI should catch lint errors)
+  eslint: { ignoreDuringBuilds: true },
+
   // Required for Docker standalone output
   output: "standalone",
 

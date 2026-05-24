@@ -83,7 +83,7 @@ def build_health_context(profile: UserProfile | None) -> str:
             rules = get_dietary_rules(conditions)
             if rules:
                 constraint_lines = [
-                    f"- {r.replace('_', ' ').capitalize()}" for r in rules
+                    f"- {r.replace('_', ' ').title()}" for r in rules
                 ]
                 sections.append(
                     "DIETARY CONSTRAINTS FOR THIS USER (MUST FOLLOW):\n"

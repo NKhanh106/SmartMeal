@@ -324,7 +324,7 @@ export default function ProfilePage() {
 
       <ProfileCompletionIndicator
         completion={calculateCompletion(form)}
-        profile={form as any}
+        profile={form as unknown as Record<string, unknown>}
       />
 
       <WizardProgressBar currentStep={step} totalSteps={5} steps={WIZARD_STEPS} />

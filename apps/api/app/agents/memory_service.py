@@ -19,6 +19,63 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.user_memory import UserMemory
 
 
+# ── Field Ownership Map ───────────────────────────────────────────────────────
+# Defines which agent "owns" each sub-field of UserMemory JSONB fields.
+# apply_memory_updates enforces: agent can only update its owned fields.
+# Orchestrator (agent_name=None) can update any field.
+
+FIELD_OWNERSHIP = {
+    "body_snapshot": {
+        "weight":            ["extractor"],
+        "energy_level":      ["extractor"],
+        "sleep_last_night":  ["extractor"],
+        "digestion_status":  ["extractor", "health_monitor"],
+        "muscle_status":     ["extractor", "health_monitor", "fitness_coach"],
+        "hydration":         ["extractor"],
+        "current_status":    ["health_monitor"],
+    },
+    "health_events":  ["extractor", "health_monitor"],
+    "nutrition_memory": {
+        "recent_meals":         ["extractor"],
+        "foods_to_avoid":       ["extractor", "nutrition_advisor"],
+        "common_deficiencies":   ["nutrition_advisor"],
+        "preferred_foods":      ["extractor"],
+    },
+    "fitness_memory": {
+        "current_restrictions":  ["fitness_coach", "health_monitor"],
+        "last_workout_date":     ["extractor"],
+        "fitness_level":         ["extractor", "fitness_coach"],
+        "preferred_workout_types": ["extractor"],
+    },
+    "key_facts":             ["extractor"],
+    "conversation_summary":  ["extractor"],
+}
+
+
+# ── Helpers ─────────────────────────────────────────────────────────────────────
+
+def _deep_merge(base: dict, update: dict) -> dict:
+    """
+    Recursively merge update into base dict.
+    - Dicts: merged recursively
+    - Lists: caller handles with specific merge logic per field
+    - Scalars: update overwrites base
+    """
+    result = base.copy()
+    for key, value in update.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def _confidence_value(confidence: str) -> int:
+    """Convert confidence string to numeric value for comparison."""
+    mapping = {"high": 3, "medium": 2, "low": 1}
+    return mapping.get(str(confidence).lower(), 2)
+
+
 # ── Read ──────────────────────────────────────────────────────────────────────────
 
 async def get_or_create_memory(
@@ -144,8 +201,8 @@ async def apply_memory_updates(
     Merge strategy per field:
     - health_events : prepend new events, keep max 50 (drop oldest when full)
     - key_facts     : upsert by fact text, update confidence if already present
-    - recent_meals   : prepend new meals, keep max 30
-    - body_snapshot : shallow merge (deep-merge nested dict)
+    - recent_meals   : prepend new meals, keep max 30 (dedup by date+meal_type)
+    - body_snapshot : deep-merge with additive sore/injury area merging
     - nutrition_memory / fitness_memory : shallow merge of top-level keys
     - conversation_summary : replace if new value is longer
     - scalar fields (last_extraction_at, etc.) : replace
@@ -213,12 +270,17 @@ async def apply_memory_updates(
 
         nutrition = dict(memory.nutrition_memory or {})
         existing_meals: list[dict] = nutrition.get("recent_meals", [])
-        existing_dates: set[str] = {(m.get("date") or "") for m in existing_meals}
+        existing_keys: set[tuple[str, str]] = {
+            (m.get("date") or "", m.get("meal_type") or "")
+            for m in existing_meals
+        }
 
-        # Prepend new meals (avoid duplicate dates)
+        # Prepend new meals (avoid duplicate date+meal_type)
         for meal in new_meals:
-            if meal.get("date") not in existing_dates:
+            key = (meal.get("date") or "", meal.get("meal_type") or "")
+            if key not in existing_keys:
                 existing_meals.insert(0, meal)
+                existing_keys.add(key)
 
         nutrition["recent_meals"] = existing_meals[:30]
 
@@ -238,11 +300,30 @@ async def apply_memory_updates(
 
     # ── Body Snapshot ───────────────────────────────────────────────────────────
     if "body_snapshot" in updates:
-        snapshot = updates["body_snapshot"]
-        existing_snapshot = dict(memory.body_snapshot or {})
-        existing_snapshot.update(snapshot)
-        existing_snapshot["last_updated"] = now.isoformat()
-        memory.body_snapshot = existing_snapshot
+        incoming = updates["body_snapshot"]
+        existing = memory.body_snapshot or {}
+
+        # Special handling for muscle_status — additive merge for sore/injury areas
+        if "muscle_status" in incoming:
+            existing_muscle = existing.get("muscle_status", {})
+            incoming_muscle = incoming["muscle_status"]
+
+            # Additive merge for sore_areas
+            existing_sore = existing_muscle.get("sore_areas", [])
+            new_sore = incoming_muscle.get("sore_areas", [])
+            merged_sore = list(dict.fromkeys(existing_sore + new_sore))
+
+            # Additive merge for injury_areas
+            existing_injuries = existing_muscle.get("injury_areas", [])
+            new_injuries = incoming_muscle.get("injury_areas", [])
+            merged_injuries = list(dict.fromkeys(existing_injuries + new_injuries))
+
+            incoming_muscle = _deep_merge(existing_muscle, incoming_muscle)
+            incoming_muscle["sore_areas"] = merged_sore
+            incoming_muscle["injury_areas"] = merged_injuries
+
+        memory.body_snapshot = _deep_merge(existing, incoming)
+        memory.body_snapshot["last_updated"] = now.isoformat()
 
     # ── Nutrition Memory ───────────────────────────────────────────────────────
     if "nutrition_memory" in updates:
@@ -274,11 +355,3 @@ async def apply_memory_updates(
 
     await db.flush()
     return memory
-
-
-# ── Helpers ─────────────────────────────────────────────────────────────────────
-
-def _confidence_value(confidence: str) -> int:
-    """Convert confidence string to numeric value for comparison."""
-    mapping = {"high": 3, "medium": 2, "low": 1}
-    return mapping.get(str(confidence).lower(), 2)

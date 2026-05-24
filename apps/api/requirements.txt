@@ -12,11 +12,12 @@ python-multipart>=0.0.9
 sqlalchemy[asyncio]>=2.0.0
 asyncpg>=0.29.0
 alembic>=1.13.0
+psycopg2-binary>=2.9.0
 
 # Auth
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
-bcrypt>=4.1.0
+bcrypt==3.2.2
 email-validator>=2.0.0
 
 # Pydantic
@@ -46,7 +47,9 @@ python-dotenv>=1.0.0
 
 # Production
 prometheus-fastapi-instrumentator>=6.1.0
-uvloop>=0.19.0
+# uvloop>=0.19.0  # Linux/macOS only — not available on Windows
+# Install on Linux/macOS with: pip install uvloop
+# Windows: pip install uvloop will fail, but the API runs fine without it
 
 # Testing
 pytest>=8.0.0

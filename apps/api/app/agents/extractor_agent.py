@@ -182,11 +182,14 @@ Rules:
                 if summary_text:
                     memory_updates["conversation_summary"] = summary_text
 
-            # 6. Apply updates to DB
-            await self._update_memory(str(context.user.id), memory_updates, db)
-
-            # 7. Mark session as extracted
-            await self._mark_session_extracted(context.session_id, db)
+            # 6. Apply updates to DB and mark session — ONLY after successful write
+            try:
+                await self._update_memory(str(context.user.id), memory_updates, db)
+                await self._mark_session_extracted(context.session_id, db)
+            except Exception as e:
+                logger.error(f"[Extractor] Memory update failed — session will retry: {e}")
+                # Do NOT mark as extracted — allow retry on next message
+                raise
 
             await self._log_complete(run, AgentResult(
                 agent_name=self.name,
@@ -440,7 +443,7 @@ Respond with only the summary text in Vietnamese. No JSON, no explanation."""
         combined = (existing + "\n" + new_entry) if existing else new_entry
         max_chars = 2000
         if len(combined) > max_chars:
-            combined = combined[-max_chars:]
+            combined = "...[earlier history trimmed]...\n" + combined[-(max_chars - 35):]
 
         return combined
 

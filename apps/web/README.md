@@ -1,221 +1,142 @@
-# SmartMeal Web — Frontend Application
+# SmartMeal Web
 
-## Mục đích
+Next.js 15 frontend for the SmartMeal platform.
 
-Đây là **frontend chính** của ứng dụng SmartMeal — một web app hiện đại cho phép người dùng quản lý dinh dưỡng, theo dõi bữa ăn, lập kế hoạch tập luyện, và tương tác với chatbot AI. Giao diện hỗ trợ **đa ngôn ngữ** (Tiếng Việt + English).
+## Technology
 
-## Công nghệ sử dụng
+### Next.js 15 App Router
 
-| Category | Công nghệ | Giải thích |
-|----------|-----------|------------|
-| **Framework** | Next.js 15 (App Router) | React framework hiện đại với Server Components, routing file-based |
-| **Language** | TypeScript 5 | Type safety toàn bộ codebase |
-| **UI Library** | React 19 | Thư viện UI component |
-| **Styling** | Tailwind CSS v4 | Utility-first CSS, responsive design |
-| **Components** | shadcn/ui (Radix UI) | Component library đẹp, accessible, có thể tùy chỉnh |
-| **State Management** | TanStack Query (React Query) | Server state: caching, background refetch, optimistic updates |
-| **HTTP Client** | Axios | Gọi API backend với interceptors |
-| **Forms** | React Hook Form + Zod | Form handling với validation |
-| **Charts** | Recharts | Biểu đồ dinh dưỡng và analytics |
-| **Animations** | Framer Motion | Smooth animations và transitions |
-| **Icons** | Lucide React | Bộ icon đẹp, consistent |
-| **Package Manager** | pnpm | Fast, efficient package manager |
-
-## Cấu trúc thư mục
+File-based routing with the App Router. Route groups organize public and authenticated routes:
 
 ```
-apps/web/
-├── src/
-│   ├── app/                    # Next.js App Router (pages & layouts)
-│   │   ├── layout.tsx        # Root layout (providers, fonts)
-│   │   ├── page.tsx          # Landing page
-│   │   ├── (auth)/           # Auth routes (grouped)
-│   │   │   ├── layout.tsx    # Auth layout
-│   │   │   ├── login/page.tsx
-│   │   │   └── register/page.tsx
-│   │   └── (dashboard)/      # Protected dashboard routes
-│   │       ├── layout.tsx    # Dashboard layout (sidebar, header)
-│   │       ├── dashboard/page.tsx
-│   │       ├── upload/page.tsx
-│   │       ├── history/page.tsx
-│   │       ├── analytics/page.tsx
-│   │       ├── goals/page.tsx
-│   │       ├── workout/page.tsx
-│   │       ├── recommendations/page.tsx
-│   │       └── profile/page.tsx
-│   ├── components/
-│   │   ├── ui/              # shadcn/ui components (button, card, input, dialog,...)
-│   │   ├── layout/          # Layout components
-│   │   │   ├── Header.tsx  # Top navigation bar
-│   │   │   ├── Sidebar.tsx  # Side navigation menu
-│   │   │   └── DashboardLayout.tsx
-│   │   └── chatbot/         # Chatbot UI
-│   │       ├── FloatingChatBot.tsx  # Nút chatbot nổi (FAB)
-│   │       ├── ChatPanel.tsx        # Panel chat chính
-│   │       ├── ChatMessage.tsx      # Tin nhắn
-│   │       ├── ChatMessageList.tsx   # Danh sách tin nhắn
-│   │       ├── ChatInput.tsx        # Input nhập tin nhắn
-│   │       ├── ChatBubble.tsx        # Chat bubble design
-│   │       ├── ChatHeader.tsx       # Header của panel chat
-│   │       └── types.ts              # TypeScript types cho chatbot
-│   ├── contexts/
-│   │   └── auth-context.tsx  # Auth state: user info, login/logout, redirect
-│   ├── hooks/
-│   │   └── use-chatbot.ts   # Custom hook để quản lý chatbot state
-│   ├── lib/
-│   │   ├── api-client.ts    # Axios instance, interceptors, error handling
-│   │   ├── utils.ts         # Helper functions (cn(), formatDate,...)
-│   │   └── profile-utils.ts  # Profile-related utilities
-│   ├── providers/
-│   │   ├── app-providers.tsx   # Main provider wrapper
-│   │   └── query-provider.tsx  # TanStack Query provider
-│   └── services/              # API service layer (typed API calls)
-│       ├── auth.service.ts
-│       ├── meal.service.ts
-│       ├── profile.service.ts
-│       ├── nutrition-goal.service.ts
-│       ├── workout.service.ts
-│       ├── progress-log.service.ts
-│       ├── analytics.service.ts
-│       ├── chatbot.service.ts
-│       ├── recommendation.service.ts
-│       └── health-service.ts
-├── middleware.ts               # Next.js middleware (auth protection)
-├── next.config.ts            # Next.js configuration
-├── package.json             # Dependencies & scripts
-├── tsconfig.json           # TypeScript config (path aliases: @/*)
-├── tailwind.config.ts      # Tailwind CSS v4 config
-├── postcss.config.js       # PostCSS config
-└── components.json         # shadcn/ui config
+(app)/          → Login, Register pages (no sidebar)
+(dashboard)/    → All authenticated pages (sidebar layout)
 ```
 
-## Routing
+Server Components fetch data, Client Components handle interactivity. The `layout.tsx` files wrap pages with providers (auth context, React Query, toast notifications).
 
-### Public Routes
-| Route | Mô tả |
-|-------|--------|
-| `/` | Landing page — giới thiệu ứng dụng |
-| `/login` | Trang đăng nhập |
-| `/register` | Trang đăng ký |
+### TanStack React Query v5
 
-### Protected Routes (Dashboard)
-| Route | Mô tả |
-|-------|--------|
-| `/dashboard` | Trang chủ — tổng quan dinh dưỡng hôm nay |
-| `/upload` | Upload ảnh thực phẩm để AI nhận diện |
-| `/history` | Lịch sử bữa ăn |
-| `/analytics` | Biểu đồ phân tích calo/macro |
-| `/goals` | Thiết lập mục tiêu dinh dưỡng |
-| `/workout` | Quản lý kế hoạch tập luyện |
-| `/profile` | Thông tin cá nhân |
-| `/recommendations` | Gợi ý từ AI |
-
-## Authentication Flow
-
-```
-User visits protected route
-    │
-    ▼
-Middleware checks cookie token
-    │
-    ├── No token? → Redirect /login
-    │
-    ├── Token exists? → Validate
-    │       │
-    │       ├── Valid → Show page
-    │       └── Invalid/Expired → Redirect /login
-    │
-    ▼
-AuthContext loads user info from API
-```
-
-## API Client Architecture
-
-Axios client với interceptors:
+Server state management. All API data flows through React Query hooks in `src/hooks/`:
 
 ```typescript
-// Request interceptor: gắn auth token tự động
-apiClient.interceptors.request.use((config) => {
-  const token = localStorage.getItem(TOKEN_KEY);
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  return config;
-});
+// Query keys are centralized
+export const DASHBOARD_QUERY_KEYS = {
+  daily: (date) => ["dashboard", "daily", date] as const,
+  weekly: (endDate) => ["dashboard", "weekly", endDate] as const,
+  activeGoal: () => ["nutrition-goal", "active"] as const,
+};
 
-// Response interceptor: xử lý 401 → refresh token → retry
-// Hoặc redirect về login nếu refresh fail
+// Parallel fetching — one failure doesn't block others
+export function useDashboardData() {
+  const daily = useDailyDashboard();
+  const weekly = useWeeklyDashboard();
+  const goal = useActiveGoal();
+  return { daily, weekly, goal, isLoading: ... };
+}
 ```
 
-## State Management
+Query invalidation triggers refetch after mutations (e.g., logging a meal invalidates the daily dashboard query).
 
-### TanStack Query (Server State)
+### Tailwind CSS v4
+
+Utility-first styling. Custom design tokens configured in the Tailwind config. Dark mode support via CSS variables.
+
+### Radix UI + shadcn/ui
+
+Headless accessible components built on Radix UI primitives. Components are copied into `src/components/ui/` from shadcn/ui and customized to match the project's design system.
+
+### Framer Motion
+
+Animations used purposefully:
+- Chat messages: slide-in from bottom
+- Typing indicator: pulsing dots
+- Page transitions: fade
+- Card interactions: spring-based hover effects
+
+## Architecture
+
+### Route Structure
+
+```
+src/app/
+├── (auth)/
+│   ├── login/
+│   └── register/
+│
+├── (dashboard)/
+│   ├── dashboard/     → Main overview with charts
+│   ├── profile/       → 5-step profile wizard
+│   ├── goals/         → Nutrition goal management
+│   ├── meals/         → Meal log list + log form
+│   ├── chat/          → Full chat interface
+│   └── admin/         → Agent monitoring (admin only)
+│
+├── layout.tsx         → Root layout with providers
+└── page.tsx          → Redirect to /dashboard or /login
+```
+
+### State Architecture
+
+Three layers, each with a clear responsibility:
+
+| Layer | Tool | What it manages |
+|-------|------|-----------------|
+| Server state | React Query | API data, caching, background refetch |
+| Auth state | AuthContext | User, tokens, login/logout |
+| UI state | `useState` within components | Local form state, modal open/close, selected tab |
+
+### SSE Streaming
+
+The chat SSE stream is consumed using the native browser `EventSource` API wrapped in a custom hook:
+
 ```typescript
-const { data, isLoading, error } = useQuery({
-  queryKey: ['meals', date],
-  queryFn: () => mealService.getMeals(date),
-  staleTime: 5 * 60 * 1000, // 5 minutes
-});
+// event: card → pendingCard state
+// data: delta → append to message content
+// data: [DONE] → setIsTyping(false)
+// data: [ERROR] → show error toast
 ```
 
-### Auth Context (Client State)
-```typescript
-const { user, login, logout, isAuthenticated } = useAuth();
-```
+The hook manages the `EventSource` lifecycle (creation on send, cleanup on unmount) to prevent memory leaks.
 
-## Chatbot System
-
-Chatbot giao tiếp với backend qua streaming API:
+## Directory Structure
 
 ```
-User types message
-    │
-    ▼
-POST /api/v1/ai/chat/sessions/{id}/messages/stream (SSE)
-    │
-    ▼
-Backend → Groq AI → Streaming tokens → Frontend
-    │
-    ▼
-Frontend renders streaming text in real-time
+src/
+├── app/                    # Next.js App Router pages
+│   ├── (auth)/            # Public auth pages
+│   ├── (dashboard)/       # Protected dashboard pages
+│   ├── layout.tsx         # Root layout + providers
+│   └── page.tsx           # Root redirect
+│
+├── components/            # Reusable UI components
+│   ├── chat/              # Chat interface, message list, cards
+│   │   └── cards/         # 5 interactive card types
+│   ├── chatbot/           # Chat input, types
+│   ├── dashboard/         # Dashboard widgets (charts, stats)
+│   ├── layout/           # Sidebar, header
+│   ├── profile/          # Profile completion indicator
+│   ├── root/              # Error boundary
+│   └── ui/               # Base shadcn components
+│
+├── hooks/                 # Custom React hooks
+│   ├── use-dashboard-queries.ts   # React Query hooks for dashboard
+│   ├── use-chatbot.ts              # Chat state + SSE streaming
+│   ├── use-debounce.ts              # Debounce utility
+│   └── use-toast.ts                # Toast notifications
+│
+├── services/             # API client functions
+│   ├── auth.service.ts
+│   ├── analytics.service.ts
+│   ├── chatbot.service.ts
+│   └── ...
+│
+├── lib/                   # Utilities, constants, types
+│   ├── api.ts            # Axios instance + interceptors
+│   ├── constants.ts
+│   └── types/
+│
+└── providers/            # Context providers
+    ├── query-provider.tsx    # React Query setup
+    └── auth-context.tsx      # Auth state
 ```
-
-Frontend quản lý session qua `sessionStorage` để duy trì conversation history.
-
-## Cách chạy
-
-```bash
-# Cài đặt dependencies
-pnpm install
-
-# Chạy development server
-pnpm dev
-# App: http://localhost:3000
-
-# Build production
-pnpm build
-
-# Run linter
-pnpm lint
-```
-
-## Responsive Design
-
-| Breakpoint | Kích thước | Thiết bị |
-|------------|------------|----------|
-| `sm:` | >= 640px | Mobile landscape |
-| `md:` | >= 768px | Tablet |
-| `lg:` | >= 1024px | Desktop |
-| `xl:` | >= 1280px | Large desktop |
-
-## Environment Variables
-
-```env
-NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
-```
-
-## Best Practices
-
-- Dùng TanStack Query cho tất cả API calls (không dùng useEffect)
-- Luôn handle loading và error states
-- Tách biệt UI components và business logic
-- Dùng TypeScript types cho tất cả props và API responses
-- Dùng shadcn/ui components thay vì custom nếu có sẵn

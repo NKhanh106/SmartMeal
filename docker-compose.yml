@@ -1,23 +1,4 @@
-version: "3.9"
-
 services:
-  db:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-smartmeal_prod}
-      POSTGRES_USER: ${POSTGRES_USER:-smartmeal_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-smartmeal_user}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - smartmeal_network
-
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -33,6 +14,16 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.25"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - smartmeal_network
 
@@ -41,19 +32,27 @@ services:
       context: ./apps/api
       dockerfile: Dockerfile
     restart: unless-stopped
-    env_file: ./apps/api/.env.production
+    env_file:
+      - apps/api/.env.production
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
     environment:
       - PORT=8000
       - WORKERS=4
-    volumes:
-      - uploads_data:/app/uploads
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     ports:
       - "8000:8000"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - smartmeal_network
     deploy:
@@ -66,12 +65,25 @@ services:
     build:
       context: ./apps/web
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
     restart: unless-stopped
-    env_file: ./apps/web/.env.production
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     ports:
       - "3000:3000"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - smartmeal_network
     deploy:
@@ -81,9 +93,7 @@ services:
           cpus: "0.5"
 
 volumes:
-  postgres_data:
   redis_data:
-  uploads_data:
 
 networks:
   smartmeal_network:

@@ -105,7 +105,7 @@ def check_hard_rule_triggers(
 def _is_nutrition_question(message: str) -> bool:
     keywords = [
         "ăn", "uống", "dinh dưỡng", "thực đơn", "calo", "protein",
-        "giảm", "tăng", "chế độ", "bữa", "món", "thực phẩm",
+        "giảm", "tăng", "chế độ", "bữa", "món", "thực phẩm", "gym",
     ]
     return any(kw in message.lower() for kw in keywords)
 

@@ -12,6 +12,7 @@ Each specialist agent inherits from BaseAgent and implements the `run()` method.
 import asyncio
 import json
 import logging
+import re
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -64,6 +65,7 @@ class AgentContext:
     profile: Any = None  # UserProfile object
     run_id: str = ""
     memory: Any = field(default=None)  # UserMemory object, set by orchestrator
+    active_goal: Any = None  # NutritionGoal object, set by orchestrator
 
 
 @dataclass
@@ -175,8 +177,10 @@ class BaseAgent(ABC):
         }
 
         if response_format == "json":
+            # Strip markdown code fences that some models return wrapping JSON
+            cleaned = re.sub(r"^\s*```json\s*|```\s*$", "", text.strip(), flags=re.MULTILINE).strip()
             try:
-                return json.loads(text)
+                return json.loads(cleaned)
             except json.JSONDecodeError as exc:
                 raise ValueError(
                     f"AI did not return valid JSON: {exc}\nOutput: {text}"
@@ -201,7 +205,7 @@ class BaseAgent(ABC):
         Call at the START of your agent's run() method.
         """
         run = AgentRun(
-            run_id=context.run_id or str(uuid4()),
+            run_id=str(uuid4()),
             user_id=context.user.id,
             session_id=context.session_id or None,
             agent_name=self.name,

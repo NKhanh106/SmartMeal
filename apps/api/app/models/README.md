@@ -1,137 +1,239 @@
-# Thư mục `models/` — SQLAlchemy ORM Models
+# Database Models
 
-## Mục đích
+SQLAlchemy 2.0 async ORM models for SmartMeal. PostgreSQL 16 with JSONB for flexible health/nutrition data.
 
-Chứa toàn bộ **SQLAlchemy ORM models** — định nghĩa cấu trúc 16 bảng trong PostgreSQL database dưới dạng các Python class. Mỗi model tương ứng với một bảng, và các mối quan hệ (relationships) giữa các bảng được thiết lập qua đây.
+## Technology
 
-## Tại sao dùng ORM?
+### SQLAlchemy 2.0 Async
 
-- **An toàn**: Tránh SQL injection vì không dùng raw SQL trực tiếp
-- **Type-safe**: Nhờ SQLAlchemy 2.0 style với `Mapped[]` và `mapped_column`, IDE có thể type-check
-- **Quản lý schema**: Alembic migrations tự động sinh từ các thay đổi ở đây
-- **Relationship**: Dễ dàng `.relationship()` để join bảng mà không cần viết SQL
-
-## Danh sách Models
-
-### Models xác thực & người dùng
-
-| Model | File | Mô tả |
-|-------|------|--------|
-| `User` | `user.py` | Tài khoản người dùng (email, password_hash, role, soft delete) |
-| `UserProfile` | `user_profile.py` | Hồ sơ thể chất (chiều cao, cân nặng, % mỡ, mức vận động, chế độ ăn, dị ứng) |
-
-### Models dinh dưỡng
-
-| Model | File | Mô tả |
-|-------|------|--------|
-| `NutritionGoal` | `nutrition_goal.py` | Mục tiêu dinh dưỡng cá nhân (BMR, TDEE, BMI, macro targets). Có ràng buộc: mỗi user chỉ có 1 active goal |
-| `FoodNutrition` | `food_nutrition.py` | Cơ sở dữ liệu thực phẩm (tên, calo, protein, carb, fat, fiber, đường, muối per 100g) |
-| `MealLog` | `meal.py` | Nhật ký bữa ăn (user_id, loại bữa ăn, thời gian, tổng macro, ảnh, AI confidence) |
-| `MealItem` | `meal.py` | Chi tiết từng món trong bữa ăn (tên món, cân nặng ước lượng, macro, nguồn: AI nhận diện / người dùng xác nhận / nhập tay) |
-
-### Models thể dục
-
-| Model | File | Mô tả |
-|-------|------|--------|
-| `WorkoutPlan` | `workout_plan.py` | Kế hoạch tập luyện (tên, mục tiêu, độ khó, ngày bắt đầu/kết thúc, trạng thái active) |
-| `WorkoutItem` | `workout_item.py` | Bài tập trong kế hoạch (tên bài tập, số set/rep, thời gian, ghi chú) |
-
-### Models theo dõi tiến độ
-
-| Model | File | Mô tả |
-|-------|------|--------|
-| `ProgressLog` | `progress_log.py` | Nhật ký theo dõi cân nặng và số đo cơ thể theo ngày (weight, body fat, waist, neck, chest, hip, ảnh) |
-
-### Models AI & Chat
-
-| Model | File | Mô tả |
-|-------|------|--------|
-| `ChatSession` | `chat.py` | Phiên trò chuyện với AI Coach (user_id, title, status: active/deleted) |
-| `ChatMessage` | `chat.py` | Tin nhắn trong phiên chat (session_id, role: user/assistant, content, metadata JSON) |
-| `AILog` | `ai_log.py` | Log gọi AI API (provider, model, latency, prompt version, raw response, status) |
-| `DailyRecommendation` | `daily_recommendation.py` | Kết quả gợi ý ngày mới từ AI (meal plan + workout plan + insights) |
-
-### Models hệ thống
-
-| Model | File | Mô tả |
-|-------|------|--------|
-| `UploadedImage` | `uploaded_image.py` | Metadata ảnh upload (user_id, loại: avatar/meal/temporary/progress, file_path, TTL, linked_entity) |
-| `ConversationInsight` | `conversation_insight.py` | Insights trích xuất từ cuộc trò chuyện (allergies, preferences, health constraints) |
-
-## Enum Types (`enums.py`)
-
-| Enum | Giá trị | Dùng trong |
-|------|---------|-----------|
-| `GenderType` | nam, nu, khac, khong_muon_noi | UserProfile |
-| `ActivityLevelType` | it_van_dong → van_dong_rat_nhieu | UserProfile, TDEE calculation |
-| `DietTypeEnum` | binh_thuong, an_chay, thuan_chay, keto, it_tinh_bot, nhieu_dam | UserProfile |
-| `NutritionGoalType` | giam_can, giu_can, tang_co | NutritionGoal |
-| `MealTypeEnum` | bua_sang, bua_trua, bua_toi, an_vat, khac | MealLog |
-| `FoodSourceType` | he_thong, usda, thu_cong, ai_goi_y | FoodNutrition |
-| `ItemSourceType` | ai_nhan_dien, nguoi_dung_xac_nhan, nhap_thu_cong | MealItem |
-| `WorkoutDifficultyType` | nguoi_moi, trung_binh, nang_cao | WorkoutPlan |
-
-## Ví dụ cấu trúc Model (SQLAlchemy 2.0 Style)
+All models use the SQLAlchemy 2.0 declarative style with `Mapped[]` type annotations. Async sessions (`AsyncSession`) are used throughout for non-blocking database operations, which is critical for FastAPI's concurrent request handling.
 
 ```python
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.db.session import Base
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-class MealLog(Base):
-    __tablename__ = "meal_logs"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
-    )
-    meal_type: Mapped[MealTypeEnum] = mapped_column(
-        Enum(MealTypeEnum, name="meal_type_enum", create_type=False),
-        nullable=False, default=MealTypeEnum.khac
-    )
-    total_calories: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=0)
-
-    # Relationship 1-N
-    items = relationship("MealItem", back_populates="meal_log", cascade="all, delete-orphan")
+async with AsyncSessionLocal() as session:
+    result = await session.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
 ```
 
-## Mối quan hệ giữa các bảng
+Relationships are loaded with `selectinload` to avoid N+1 queries:
 
-```
-users (1)───(1) user_profiles
-     │
-     ├──(N) meal_logs ──(N) meal_items
-     ├──(N) nutrition_goals
-     ├──(N) progress_logs
-     ├──(N) workout_plans ──(N) workout_items
-     ├──(N) chat_sessions ──(N) chat_messages
-     ├──(N) ai_analysis_logs
-     ├──(N) daily_recommendations
-     ├──(N) uploaded_images
-     └──(N) conversation_insights
+```python
+result = await session.execute(
+    select(MealLog).options(selectinload(MealLog.items))
+    .where(MealLog.user_id == user_id)
+)
 ```
 
-## Ràng buộc đặc biệt (Constraints)
+### PostgreSQL JSONB
 
-- **unique constraint**: `user_profiles.user_id` — mỗi user chỉ có 1 profile
-- **partial unique index**: `nutrition_goals` — chỉ có 1 active goal mỗi user (`is_active = true`)
-- **unique constraint**: `progress_logs(user_id, log_date)` — mỗi user chỉ ghi 1 log mỗi ngày
-- **check constraint**: `users.role IN ('user', 'admin')`
-- **foreign key constraint**: `meal_logs(nutrition_goal_id, user_id)` → `nutrition_goals(id, user_id)` (composite FK)
+PostgreSQL JSONB columns store health conditions, body snapshots, and health events because these schemas evolve frequently and don't fit cleanly into a fixed relational schema.
 
-## Cách tạo migration khi thay đổi model
+```python
+# Example: health_conditions stored as JSONB
+health_conditions: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
+
+# GIN index for efficient JSONB querying
+Index("ix_user_memory_health_events", "health_events", postgresql_using="gin")
+```
+
+Deep-merge is required when updating JSONB columns — simple `.update()` would replace the entire JSON object rather than merging individual fields. The `memory_service.py` handles this with recursive dict merging.
+
+## Schema Overview
+
+```
+User (1) ──────────────── (1) UserProfile
+  │                              │ usage_goal, activity_level
+  │                              │ health_conditions (JSONB)
+  │                              │ taste_preferences (JSONB)
+  │
+  ├── (many) NutritionGoal
+  ├── (many) MealLog ──── (many) MealItem
+  ├── (many) WorkoutPlan ── (many) WorkoutItem
+  ├── (many) ProgressLog
+  ├── (many) ChatSession ── (many) ChatMessage
+  │                              │ card (JSONB)
+  │                              │ card_response (JSONB)
+  │                              │ message_type
+  ├── (1) UserMemory
+  │         body_snapshot (JSONB)
+  │         health_events (JSONB[])
+  │         nutrition_memory (JSONB)
+  │         fitness_memory (JSONB)
+  │         key_facts (JSONB[])
+  │
+  ├── (many) AgentRun
+  ├── (many) AgentInsight
+  └── (many) DailyRecommendation
+```
+
+## Model Reference
+
+### `User`
+
+Core authentication table.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID | Primary key |
+| `email` | String | Unique, indexed |
+| `hashed_password` | String | bcrypt hashed |
+| `full_name` | String | |
+| `role` | Enum | `user`, `admin` |
+| `is_active` | Boolean | Soft delete flag |
+| `last_activity_at` | DateTime | Updated on each API call |
+
+### `UserProfile`
+
+Extended user data for nutrition and fitness. One per user.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `user_id` | UUID FK | References User |
+| `gender` | Enum | `male`, `female`, `other` |
+| `date_of_birth` | Date | Used for BMR calculation |
+| `height_cm` | Float | |
+| `current_weight_kg` | Float | |
+| `current_body_fat_percent` | Float | Optional |
+| `activity_level` | Enum | sedentary → very_active |
+| `diet_type` | Enum | balanced, low_carb, high_protein, etc. |
+| `usage_goal` | Enum | weight_loss, muscle_gain, maintenance, etc. |
+| `allergies` | JSONB | List of `{allergen, severity}` objects |
+| `health_conditions` | JSONB | List of `{condition, severity}` objects |
+| `medications` | JSONB | List of `{name, frequency}` objects |
+| `taste_preferences` | JSONB | `{spicy: 1-5, sweet: 1-5, ...}` |
+| `cuisine_preferences` | JSONB | List of cuisine names |
+| `sleep_duration_hours` | Float | |
+| `sleep_quality` | Enum | poor, fair, good, excellent |
+| `stress_level` | Integer | 1-10 |
+
+### `MealLog`
+
+A meal entry for a specific date and meal type.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID | Primary key |
+| `user_id` | UUID FK | |
+| `meal_type` | Enum | breakfast, lunch, dinner, snack |
+| `meal_time` | DateTime | When the meal was eaten |
+| `total_calories` | Float | Calculated from items |
+| `total_protein_g` | Float | |
+| `total_carb_g` | Float | |
+| `total_fat_g` | Float | |
+| `source` | Enum | `manual`, `chat_extraction`, `chat_command` |
+| `items` | Relationship | One-to-many → MealItem |
+
+### `MealItem`
+
+Individual food item within a meal log.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID | Primary key |
+| `meal_log_id` | UUID FK | |
+| `food_name` | String | Name from food database or user entry |
+| `food_id` | UUID FK | References FoodNutrition (nullable) |
+| `serving_size_g` | Float | |
+| `calories` | Float | |
+| `protein_g` | Float | |
+| `carb_g` | Float | |
+| `fat_g` | Float | |
+
+### `UserMemory`
+
+One row per user — stores the persistent AI context. All knowledge the AI has about the user.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `user_id` | UUID PK FK | |
+| `body_snapshot` | JSONB | Current physical state |
+| `health_events` | JSONB[] | Append-only event log |
+| `nutrition_memory` | JSONB | Eating patterns |
+| `fitness_memory` | JSONB | Workout history |
+| `key_facts` | JSONB[] | Stable facts (upserted) |
+| `conversation_summary` | Text | Rolling summary |
+| `last_extraction_at` | DateTime | When extractor last ran |
+
+### `ChatSession`
+
+A chat conversation session.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID | Primary key |
+| `user_id` | UUID FK | |
+| `title` | String | Auto-generated or user-provided |
+| `created_at` | DateTime | |
+
+### `ChatMessage`
+
+Individual message within a chat session.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID | Primary key |
+| `session_id` | UUID FK | |
+| `role` | Enum | `user`, `assistant` |
+| `content` | Text | Message content |
+| `message_type` | Enum | `text`, `card`, `system` |
+| `card` | JSONB | Card data (if message_type=card) |
+| `card_response` | JSONB | User's response to the card |
+| `token_count` | Integer | Estimated tokens used |
+
+### `NutritionGoal`
+
+Daily macro targets for a user.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID | Primary key |
+| `user_id` | UUID FK | |
+| `goal_type` | Enum | `cutting`, `maintaining`, `bulking` |
+| `daily_calorie_target` | Float | |
+| `protein_target_g` | Float | |
+| `carb_target_g` | Float | |
+| `fat_target_g` | Float | |
+| `is_active` | Boolean | Only one active goal at a time |
+
+### `WorkoutPlan` / `WorkoutItem`
+
+Workout plan with individual exercise items.
+
+### `Exercise`
+
+Exercise library — seeded from a pre-defined list. Used for autocomplete and exercise database.
+
+### `ProgressLog`
+
+Weight and measurement tracking over time.
+
+### `AgentRun`
+
+Audit log for every agent execution. Tracks agent name, user, duration, token usage, and success/failure.
+
+### `DailyRecommendation`
+
+AI-generated daily meal and workout suggestions. Refreshed periodically.
+
+## Migrations
 
 ```bash
-cd apps/api
-alembic revision --autogenerate -m "Mô tả thay đổi"
+# Create a new migration
+alembic revision --autogenerate -m "description"
+
+# Apply pending migrations
 alembic upgrade head
+
+# Rollback one step
+alembic downgrade -1
+
+# Check current version
+alembic current
+
+# Show migration history
+alembic history
 ```
 
-## Best Practices
-
-- Luôn dùng `server_default=text("now()")` cho timestamp thay vì Python datetime
-- Dùng UUID thay vì auto-increment integer cho primary key (bảo mật hơn)
-- Soft delete (xoá mềm) bằng `deleted_at` thay vì hard delete cho User
-- Đặt `nullable=False` chỉ khi thực sự bắt buộc
-- Thêm index cho các trường thường xuyên query (user_id, created_at, log_date)
+**Never delete migration files.** Deleting migrations breaks the migration history in environments where those migrations have already been applied. If a migration is incorrect, create a new one to fix the issue.

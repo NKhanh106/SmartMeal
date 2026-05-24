@@ -109,7 +109,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       authService.setTokens(result.access_token, result.refresh_token);
       // Set cookie for middleware auth check
       if (typeof window !== "undefined") {
-        document.cookie = `access_token=${result.access_token}; path=/; max-age=${result.expires_in ?? 86400}; SameSite=Lax`;
+        document.cookie = `access_token=${result.access_token}; path=/; max-age=${(result as { expires_in?: number }).expires_in ?? 86400}; SameSite=Lax`;
       }
       await refreshUser();
       router.replace("/dashboard");

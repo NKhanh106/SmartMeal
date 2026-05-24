@@ -57,15 +57,6 @@ class MealUpdatePreviewResponse(BaseModel):
     total_fat_g: float = Field(..., ge=0)
     meal_type: str
     ai_model: Optional[str] = None
-    # Image metadata — set when image is persisted during preview
-    uploaded_image_id: Optional[UUID] = Field(
-        None,
-        description="ID of the uploaded image. Use this in the confirm request to link the image to the meal.",
-    )
-    image_url: Optional[str] = Field(
-        None,
-        description="Public URL to the uploaded preview image.",
-    )
     # Cache indicator — true when result was served from Redis cache
     from_cache: bool = Field(
         False,
@@ -88,11 +79,6 @@ class MealUpdateConfirmItem(BaseModel):
 class MealUpdateConfirmRequest(BaseModel):
     meal_type: str = Field(..., description="bua_sang | bua_trua | bua_toi | an_vat | khac")
     meal_time: Optional[datetime] = Field(None)
-    uploaded_image_id: Optional[UUID] = Field(
-        None,
-        description="ID of the image previously uploaded during preview. "
-        "If provided, the image will be linked to this meal log.",
-    )
     items: list[MealUpdateConfirmItem] = Field(..., min_length=1)
 
 

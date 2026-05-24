@@ -1,6 +1,7 @@
 "use client";
 
 import { Bot, RefreshCw, User } from "lucide-react";
+import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import type { ChatMessage as ChatMessageType } from "@/components/chatbot/types";
 
@@ -49,9 +50,31 @@ export function ChatMessage({ message, onRetry }: ChatMessageProps) {
             : "bg-slate-50 text-slate-800 rounded-tl-none border border-slate-100"
         )}
       >
-        <p className="whitespace-pre-wrap break-words">{message.content}</p>
-        {message.isStreaming && !isUser && (
-          <span className="inline-block w-2 h-3.5 bg-slate-400 animate-pulse ml-0.5 mt-0.5 rounded-sm align-middle" />
+        {!message.content && message.isStreaming && !isUser ? (
+          <div className="flex items-center gap-1 h-5 py-1">
+            <motion.div
+              animate={{ opacity: [0.4, 1, 0.4] }}
+              transition={{ repeat: Infinity, duration: 1, delay: 0 }}
+              className="h-1.5 w-1.5 bg-slate-400 rounded-full"
+            />
+            <motion.div
+              animate={{ opacity: [0.4, 1, 0.4] }}
+              transition={{ repeat: Infinity, duration: 1, delay: 0.2 }}
+              className="h-1.5 w-1.5 bg-slate-400 rounded-full"
+            />
+            <motion.div
+              animate={{ opacity: [0.4, 1, 0.4] }}
+              transition={{ repeat: Infinity, duration: 1, delay: 0.4 }}
+              className="h-1.5 w-1.5 bg-slate-400 rounded-full"
+            />
+          </div>
+        ) : (
+          <>
+            <p className="whitespace-pre-wrap break-words">{message.content}</p>
+            {message.isStreaming && !isUser && (
+              <span className="inline-block w-2 h-3.5 bg-slate-400 animate-pulse ml-0.5 mt-0.5 rounded-sm align-middle" />
+            )}
+          </>
         )}
         <div
           className={cn(

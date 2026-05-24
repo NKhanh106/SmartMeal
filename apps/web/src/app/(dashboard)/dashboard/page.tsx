@@ -153,7 +153,7 @@ function MacroCard({
   );
 }
 
-export default function DashboardPage() {
+function DashboardPage() {
   const { user } = useAuth();
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -228,10 +228,7 @@ export default function DashboardPage() {
           )}
         </div>
         <div className="flex items-center gap-2">
-          <Button size="sm" className="gap-2" onClick={() => router.push("/upload")}>
-            <Plus className="h-4 w-4" />
-            Add Meal
-          </Button>
+
           <Button size="sm" variant="outline" className="gap-2" onClick={() => router.push("/history")}>
             <Clock className="h-4 w-4" />
             History
@@ -273,10 +270,9 @@ export default function DashboardPage() {
           <p className="mt-1 text-sm text-slate-400">
             Start logging meals to see your nutrition summary
           </p>
-          <Button className="mt-4 gap-2" onClick={() => router.push("/upload")}>
-            <Plus className="h-4 w-4" />
-            Log your first meal
-          </Button>
+          <p className="mt-4 text-sm font-medium text-emerald-600">
+            Click the chat icon to ask the AI to log your meal!
+          </p>
         </div>
       ) : (
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">

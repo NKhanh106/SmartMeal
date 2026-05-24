@@ -1,191 +1,203 @@
-# 🥗 SmartMeal — Trợ lý Dinh dưỡng & Luyện tập Cá nhân hóa bằng AI
+# SmartMeal
 
-> **Trạng thái**: MVP đạt ~90% — Backend đã audit & fix bugs, Frontend scaffold sẵn sàng phát triển UI.
+AI-powered nutrition and fitness tracking platform for Vietnamese users. Combines a multi-agent AI system with personalized health profiling to deliver nutrition advice, fitness coaching, and meal tracking through a conversational chat interface.
 
----
+## What It Does
 
-## Tài liệu
+SmartMeal is a personal nutrition and fitness assistant accessed through a chat interface. Users log meals by simply describing what they ate ("sáng nay tôi ăn bánh mì với sữa"), ask nutrition questions ("tôi nên ăn gì để giảm cân?"), or request workout plans ("gợi ý bài tập gym cho người mới"). The AI understands Vietnamese, tracks macros, monitors health conditions, and adapts recommendations based on the user's profile and conversation history.
 
-### 📖 Tài liệu tổng quan (Đọc trước)
-
-**[`TOTAL_ABOUT_PROJECT.md`](./TOTAL_ABOUT_PROJECT.md)** — Tài liệu siêu chi tiết bao gồm:
-- Tổng quan dự án, tính năng, và vấn đề cốt lõi
-- Biểu đồ kiến trúc hệ thống (Mermaid.js)
-- Biểu đồ luồng dữ liệu AI Meal Recognition (Mermaid.js)
-- Danh sách đầy đủ công nghệ & thư viện
-- Cấu trúc thư mục chi tiết với comment
-- Hướng dẫn cài đặt từ đầu
-- Danh sách đầy đủ API Endpoints
-
-### 📂 Tài liệu theo module
-
-#### Backend (apps/api/)
-
-| File | Mô tả |
-|------|--------|
-| [`apps/api/README.md`](./apps/api/README.md) | Tổng quan backend, cách chạy, công nghệ |
-| [`apps/api/app/README.md`](./apps/api/app/README.md) | Core application logic, routing flow |
-| [`apps/api/app/api/v1/README.md`](./apps/api/app/api/v1/README.md) | Danh sách tất cả API endpoints |
-| [`apps/api/app/models/README.md`](./apps/api/app/models/README.md) | 16 database tables, ORM models |
-| [`apps/api/app/schemas/README.md`](./apps/api/app/schemas/README.md) | Pydantic schemas, validation |
-| [`apps/api/app/services/README.md`](./apps/api/app/services/README.md) | Business logic layer |
-| [`apps/api/app/core/README.md`](./apps/api/app/core/README.md) | Config, security, cache, rate limiter |
-| [`apps/api/app/ai/README.md`](./apps/api/app/ai/README.md) | AI providers (Gemini, Groq) |
-| [`apps/api/app/chatbot/README.md`](./apps/api/app/chatbot/README.md) | AI chatbot system |
-
-#### Frontend (apps/web/)
-
-| File | Mô tả |
-|------|--------|
-| [`apps/web/README.md`](./apps/web/README.md) | Tổng quan frontend, routing, auth flow |
-| [`apps/web/src/README.md`](./apps/web/src/README.md) | Source code structure, providers |
-| [`apps/web/src/components/README.md`](./apps/web/src/components/README.md) | React components |
-| [`apps/web/src/lib/README.md`](./apps/web/src/lib/README.md) | Axios client, utilities |
-| [`apps/web/src/services/README.md`](./apps/web/src/services/README.md) | API service layer |
-
----
-
-## Tính năng cốt lõi
-
-| Tính năng | Mô tả |
-|------------|--------|
-| **Auth** | Đăng ký / Đăng nhập / JWT token + bcrypt |
-| **User Profile** | Hồ sơ thể chất (chiều cao, cân nặng, % mỡ, vòng đo...) |
-| **Nutrition Goals** | Tính BMR / TDEE / BMI theo Mifflin-St Jeor |
-| **Meal Logs** | Ghi nhận bữa ăn kèm chi tiết món ăn, tính calo/macro |
-| **Food Nutrition DB** | Cơ sở dữ liệu ~65 món ăn Việt Nam + USDA |
-| **Dashboard** | Thống kê calo/macro theo ngày và tuần, timezone-aware |
-| **Progress Logs** | Nhật ký theo dõi cân nặng, % mỡ, ảnh tiến bộ |
-| **Workout Plans** | Kế hoạch tập luyện (1 active plan/user) |
-| **AI Meal Update** | Nhận diện món ăn từ ảnh (Gemini Vision) → tự động ghi nhận bữa ăn |
-| **AI Daily Planner** | Sinh gợi ý lịch trình ăn uống + tập luyện cho ngày mới |
-| **AI Chatbot** | Trợ lý AI tương tác theo ngữ cảnh (profile, goals, meal history) |
-
----
-
-## Kiến trúc
+## Architecture Overview
 
 ```
-SmartMeal/                          # Root — Turborepo monorepo (pnpm workspaces)
+Next.js 15 (Web)
+     ↕ REST + SSE
+FastAPI (API)
+     ↕
+Multi-Agent Orchestrator
+  ├── Extractor Agent      → UserMemory (PostgreSQL JSONB)
+  ├── Health Monitor        → AgentInsight
+  ├── Nutrition Advisor     → MealLog
+  ├── Fitness Coach         → WorkoutPlan
+  └── Web Researcher       → Cached findings (Redis)
+     ↕
+PostgreSQL 16 + Redis 7 + Alembic
+```
+
+## Tech Stack
+
+| Layer | Technology | Version |
+|-------|-----------|---------|
+| Frontend | Next.js (App Router) | 15.x |
+| UI | Radix UI + Tailwind CSS | 4.x |
+| State | TanStack React Query | v5 |
+| Backend | FastAPI + Uvicorn | 0.110+ |
+| Language | Python | 3.12 |
+| ORM | SQLAlchemy (async) | 2.0 |
+| Database | PostgreSQL | 16 |
+| Cache | Redis | 7 |
+| AI | Groq API + Google Gemini | — |
+| Auth | JWT + bcrypt | — |
+| Migrations | Alembic | — |
+| Containers | Docker + Docker Compose | — |
+
+## Project Structure
+
+```
+SmartMeal/
 ├── apps/
-│   ├── api/                      # Backend (FastAPI + PostgreSQL + Alembic)
-│   │   ├── app/               # Source code (models, schemas, services, AI, chatbot)
-│   │   ├── alembic/           # Database migrations
-│   │   └── scripts/           # Seed data scripts
-│   └── web/                      # Frontend (Next.js 15 + Tailwind CSS v4 + shadcn/ui)
-├── .env.example                   # Template biến môi trường
-├── pnpm-workspace.yaml            # pnpm workspaces
-├── turbo.json                    # Turborepo pipeline
-└── TOTAL_ABOUT_PROJECT.md         # Tài liệu tổng quan chi tiết
+│   ├── api/          # FastAPI backend
+│   │   ├── app/
+│   │   │   ├── agents/         # Multi-agent AI system
+│   │   │   ├── api/v1/         # REST API endpoints
+│   │   │   ├── core/           # Config, security, cache
+│   │   │   ├── models/          # SQLAlchemy ORM models
+│   │   │   ├── schemas/         # Pydantic request/response
+│   │   │   ├── services/        # Business logic layer
+│   │   │   ├── chatbot/         # Chat pipeline (cards, triggers, context)
+│   │   │   ├── db/              # DB session management
+│   │   │   └── main.py          # FastAPI app entry point
+│   │   ├── migrations/          # Alembic migration scripts
+│   │   ├── scripts/             # Seed data, utilities
+│   │   └── tests/               # pytest test suite
+│   │
+│   └── web/           # Next.js 15 frontend
+│       └── src/
+│           ├── app/             # Next.js pages (App Router)
+│           ├── components/       # React components
+│           ├── hooks/           # Custom React hooks
+│           ├── services/        # API client functions
+│           └── lib/             # Utilities, types, constants
+│
+├── docker-compose.yml  # Local development stack
+├── .env.example        # Environment template
+└── README.md           # This file
 ```
 
-### Frontend → Backend Communication
+## Getting Started
 
-- **Base URL**: `http://127.0.0.1:8000`
-- **API Prefix**: Tất cả endpoints đều có prefix `/api/v1`
-- **Auth**: JWT Bearer token trong header `Authorization: Bearer <token>`
-- **Swagger**: `http://127.0.0.1:8000/docs`
+### Prerequisites
 
----
+- Python 3.12+
+- Node.js 20+
+- pnpm
+- PostgreSQL 16 (or Supabase connection URL)
+- Redis 7
 
-## Yêu cầu hệ thống
+### Local Development
 
-| Công cụ | Phiên bản | Ghi chú |
-|---------|-----------|---------|
-| `Node.js` | >= 20 | Cần cho frontend |
-| `pnpm` | >= 9 | Package manager |
-| `Python` | >= 3.12 | Backend runtime |
-| `PostgreSQL` | >= 15 | Database |
-| `Redis` | Latest | Optional (app chạy degraded mode nếu không có) |
-
----
-
-## Cài đặt & Khởi chạy nhanh
+1. **Clone and install dependencies**
 
 ```bash
-# 1. Cài dependencies
-make install
+# Backend
+cd apps/api
+pip install -r requirements.txt
 
-# 2. Cấu hình .env
+# Frontend
+cd apps/web
+pnpm install
+```
+
+2. **Configure environment**
+
+```bash
+# Backend
 cp apps/api/.env.example apps/api/.env
-# Chỉnh sửa: DATABASE_URL, SECRET_KEY, GEMINI_API_KEY, GROQ_API_KEY
+# Edit apps/api/.env with your database URL, Redis URL, and API keys
 
-# 3. Chạy migrations
-make migrate-api
-
-# 4. Seed dữ liệu (development)
-make seed
-
-# 5. Chạy Backend
-make dev-api      # → http://localhost:8000/docs
-
-# 6. Chạy Frontend (terminal khác)
-make dev-web      # → http://localhost:3000
+# Frontend
+cp apps/web/.env.example apps/web/.env.local
 ```
 
-**Tài khoản demo** (sau khi seed):
-- Email: `user1@smartmeal.local` → `user10@smartmeal.local`
-- Password: `SmartMeal123`
+3. **Run database migrations**
 
-### Lệnh Makefile (root)
-
-| Lệnh | Chức năng |
-|-------|-----------|
-| `make install` | Cài tất cả dependencies (pnpm) |
-| `make dev-web` | Chạy frontend dev server |
-| `make dev-api` | Chạy backend dev server |
-| `make migrate-api` | Chạy Alembic migrations |
-| `make test-api` | Chạy pytest |
-| `make seed` | Seed food data (development only) |
-
----
-
-## Database Schema
-
-Database gồm **16 bảng**, được quản lý qua **Alembic** (4 migrations):
-
-```
-users                          -- Tài khoản người dùng (soft delete)
-user_profiles                  -- Hồ sơ thể chất (1:1 với users)
-nutrition_goals                -- Mục tiêu dinh dưỡng (1 active/user)
-food_nutrition                 -- Cơ sở dữ liệu thực phẩm
-meal_logs                      -- Nhật ký bữa ăn
-meal_items                     -- Chi tiết món trong bữa ăn
-ai_analysis_logs               -- Log gọi AI (latency, prompt, response)
-daily_recommendations          -- Kết quả AI Daily Planner
-progress_logs                  -- Nhật ký theo dõi thể chất
-workout_plans                  -- Kế hoạch tập luyện (1 active/user)
-workout_items                  -- Bài tập trong kế hoạch
-chat_sessions                  -- Phiên chat với AI Coach
-chat_messages                  -- Tin nhắn trong phiên chat
-uploaded_images                -- Metadata ảnh upload
-conversation_insights          -- Insights trích xuất từ cuộc trò chuyện
+```bash
+cd apps/api
+alembic upgrade head
 ```
 
----
+4. **Seed food data (optional)**
 
-## AI Providers
+```bash
+cd apps/api
+python scripts/seed_food_data.py
+python scripts/seed_demo_data.py  # Creates demo user
+```
 
-| Provider | Mô hình | Mục đích | Cấu hình |
-|----------|---------|-----------|-----------|
-| **Gemini** | `gemini-2.5-flash` | Nhận diện món ăn từ ảnh (Vision) | `GEMINI_API_KEY` |
-| **Groq** | `llama-3.3-70b-versatile` | Daily Planner, Chatbot (text) | `GROQ_API_KEY` |
+5. **Start development servers**
 
-Có thể chọn provider qua biến: `AI_CHAT_PROVIDER`, `AI_PLANNER_PROVIDER`, `AI_MEAL_PROVIDER`.
+```bash
+# Terminal 1 — API
+cd apps/api && uvicorn app.main:app --reload --port 8000
 
----
+# Terminal 2 — Frontend
+cd apps/web && pnpm dev
+```
 
-## Các file quan trọng
+The frontend is at `http://localhost:3000`, the API at `http://localhost:8000`.
 
-| File | Mục đích |
-|------|---------|
-| `apps/api/app/main.py` | FastAPI entry point, CORS, router registration, lifespan |
-| `apps/api/app/core/config.py` | Pydantic Settings — tất cả env vars |
-| `apps/api/app/core/security.py` | Password hashing (bcrypt), JWT helpers |
-| `apps/api/app/api/deps.py` | Auth dependencies (`get_current_user`, `ensure_user_access`) |
-| `apps/api/app/ai/factory.py` | AI Provider factory với caching |
-| `apps/api/alembic/versions/*.py` | Database migrations |
-| `apps/web/src/lib/api-client.ts` | Axios client với JWT interceptors |
-| `apps/web/src/providers/query-provider.tsx` | TanStack Query provider |
-| `apps/api/scripts/seed_demo_data.py` | Seed 10 user + 10 ngày dữ liệu demo |
-| `TOTAL_ABOUT_PROJECT.md` | Tài liệu tổng quan đầy đủ |
+### Demo Credentials
+
+After running `seed_demo_data.py`:
+
+- **Email:** demo@smartmeal.vn
+- **Password:** Demo123!
+
+## Environment Variables
+
+### Backend (apps/api/.env)
+
+| Variable | Description |
+|----------|-------------|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `REDIS_URL` | Redis connection string |
+| `SECRET_KEY` | JWT signing key (32+ chars in production) |
+| `ALGORITHM` | JWT algorithm (default: HS256) |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | Token expiry (default: 1440) |
+| `GROQ_API_KEY` | Groq API key for LLM calls |
+| `GEMINI_API_KEY` | Google Gemini API key for vision |
+| `ENVIRONMENT` | `development` or `production` |
+| `BACKEND_CORS_ORIGINS` | Allowed frontend URL(s) |
+
+### Frontend (apps/web/.env.local)
+
+| Variable | Description |
+|----------|-------------|
+| `NEXT_PUBLIC_API_BASE_URL` | Backend API URL |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anonymous key |
+
+## Running with Docker
+
+```bash
+# Start all services (api, web, redis)
+docker-compose up --build
+
+# Start in background
+docker-compose up -d --build
+```
+
+The API is at `http://localhost:8000`, the frontend at `http://localhost:3000`.
+
+## API Documentation
+
+Interactive API docs are available in development mode:
+
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
+- OpenAPI JSON: `http://localhost:8000/openapi.json`
+
+Docs are disabled in production (`ENVIRONMENT=production`).
+
+## Testing
+
+```bash
+# Backend tests
+cd apps/api && python -m pytest tests/ -q
+
+# TypeScript check
+cd apps/web && npx tsc --noEmit
+```
+
+## License
+
+Private project — all rights reserved.

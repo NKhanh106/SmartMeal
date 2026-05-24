@@ -1,90 +1,87 @@
-# Thư mục `components/` — React Components
+# Component Library
 
-## Mục đích
+React components organized by feature domain. Built with TypeScript, Radix UI, and Tailwind CSS.
 
-Chứa toàn bộ **React components** được sử dụng trong ứng dụng SmartMeal.
-
-## Cấu trúc
+## Structure
 
 ```
 components/
-├── ui/              # shadcn/ui base components — reusable primitives
-├── layout/         # Layout components — Header, Sidebar, DashboardLayout
-└── chatbot/        # Chatbot UI — FloatingChatBot, ChatPanel, ChatMessage,...
+├── chat/            # Chat interface, message rendering
+│   ├── ChatPanel.tsx
+│   ├── ChatMessage.tsx
+│   ├── ChatMessageList.tsx
+│   ├── ChatHeader.tsx
+│   ├── types.ts
+│   └── cards/
+│       ├── ChatCardContainer.tsx  # Card wrapper + SSE handler
+│       ├── SingleSelectCard.tsx
+│       ├── MultiSelectCard.tsx
+│       ├── RankCard.tsx
+│       ├── NumberInputCard.tsx
+│       └── ConfirmCard.tsx
+│
+├── chatbot/         # Main chatbot widget
+│   ├── ChatInput.tsx      # Text input with send button
+│   ├── FloatingChatBot.tsx # Collapsible FAB button
+│   └── types.ts
+│
+├── dashboard/       # Dashboard widgets
+│   ├── StatCard.tsx       # Metric with progress bar
+│   ├── MacroCard.tsx      # Protein/Carbs/Fat display
+│   └── charts/            # Recharts wrappers
+│
+├── layout/         # Page layout
+│   ├── Sidebar.tsx        # Navigation sidebar
+│   ├── DashboardLayout.tsx # Sidebar + content wrapper
+│   └── Header.tsx
+│
+├── profile/        # Profile wizard
+│   └── ProfileCompletionIndicator.tsx
+│
+├── root/           # Error boundary
+│   └── ErrorBoundary.tsx
+│
+└── ui/            # Base shadcn/ui components
+    ├── button.tsx
+    ├── card.tsx
+    ├── input.tsx
+    ├── badge.tsx
+    ├── dialog.tsx
+    ├── dropdown-menu.tsx
+    ├── select.tsx
+    ├── tabs.tsx
+    ├── toast.tsx / Toaster.tsx
+    ├── progress.tsx
+    ├── label.tsx
+    ├── table.tsx
+    ├── avatar.tsx
+    ├── scroll-area.tsx
+    ├── separator.tsx
+    ├── skeleton.tsx
+    ├── sheet.tsx
+    └── alert-dialog.tsx
 ```
 
-## UI Components (`ui/`)
+## Design Principles
 
-Các base components từ shadcn/ui (Radix UI primitives):
+- **Compound components** for complex UI: `Card` = `CardHeader` + `CardContent` + `CardFooter`
+- **`React.memo`** on list items (`ChatMessage`, `MealLogCard`) to prevent unnecessary re-renders when the list grows
+- **Error boundaries** around all async data sections — the app never crashes due to a failed API call
+- **Mobile-first:** all components verified at 375px viewport width
+- **Radix UI primitives** for accessibility: keyboard navigation, focus management, screen reader support
 
-| Component | Mô tả |
-|-----------|--------|
-| `button.tsx` | Nút bấm (multiple variants: default, outline, ghost, destructive) |
-| `card.tsx` | Card container cho nội dung |
-| `input.tsx` | Text input field |
-| `dialog.tsx` | Modal dialog |
-| `progress.tsx` | Progress bar (hiển thị % hoàn thành mục tiêu) |
-| `toast.tsx` | Toast notifications (dùng thông qua Sonner) |
-| `badge.tsx` | Tags/labels |
-| `avatar.tsx` | User avatar |
-| `table.tsx` | Table components |
-| `tabs.tsx` | Tab navigation |
-| `dropdown-menu.tsx` | Dropdown menu |
-| `scroll-area.tsx` | Scrollable area |
-| `sheet.tsx` | Slide-out panel |
-| `skeleton.tsx` | Loading skeleton |
-| `label.tsx` | Form label |
-| `separator.tsx` | Horizontal/vertical divider |
-| `toaster.tsx` | Toast provider (sử dụng Sonner) |
+## Interactive Card System
 
-## Layout Components (`layout/`)
+The chatbot uses an interactive card system to collect structured data from users. Five card types:
 
-| Component | Mô tả |
-|-----------|--------|
-| `Header.tsx` | Top navigation bar với logo, user menu |
-| `Sidebar.tsx` | Left sidebar navigation menu |
-| `DashboardLayout.tsx` | Wrapper layout cho các trang dashboard |
+| Card Type | Trigger | User Action |
+|-----------|---------|-------------|
+| `single_select` | Choose one option | Click a radio-style option |
+| `multi_select` | Choose multiple | Checkbox-style selection |
+| `rank` | Order items | Drag to reorder |
+| `number_input` | Enter a number | Type a value |
+| `confirm` | Confirm/cancel | Yes/No buttons |
 
-## Chatbot Components (`chatbot/`)
+Cards are rendered by `ChatCardContainer`, which also handles the SSE `event: card` stream and dispatches to the appropriate card component. User responses are submitted back to the API via the chatbot service.
 
-| Component | Mô tả |
-|-----------|--------|
-| `FloatingChatBot.tsx` | FAB (Floating Action Button) — nút chatbot nổi ở góc phải màn hình |
-| `ChatPanel.tsx` | Panel chat chính — chứa header, message list, input |
-| `ChatMessage.tsx` | Wrapper cho một tin nhắn (user hoặc assistant) |
-| `ChatMessageList.tsx` | Danh sách scrollable tất cả tin nhắn |
-| `ChatInput.tsx` | Input để nhập tin nhắn (có nút gửi) |
-| `ChatBubble.tsx` | Chat bubble design cho từng tin nhắn |
-| `ChatHeader.tsx` | Header của chatbot panel (title, close button) |
-| `types.ts` | TypeScript interfaces cho chatbot |
-
-## Chatbot Architecture
-
-```
-FloatingChatBot (FAB button)
-    │
-    ▼ (onClick)
-ChatPanel opens
-    │
-    ├── ChatHeader (title, close button)
-    ├── ChatMessageList (scrollable messages)
-    │   └── ChatMessage → ChatBubble
-    └── ChatInput (text input + send button)
-```
-
-## Cách sử dụng Chatbot
-
-```tsx
-// FloatingChatBot được đặt trong app layout và luôn visible
-<FloatingChatBot />
-
-// Hoặc sử dụng ChatPanel trực tiếp trong một page
-import { ChatPanel } from "@/components/chatbot/ChatPanel";
-```
-
-## Best Practices
-
-- Dùng shadcn/ui components cho UI primitives thay vì custom components
-- Layout components nhận props rõ ràng, có TypeScript types
-- Chatbot components có internal state management (không cần external state)
-- Luôn handle loading và error states trong UI components
+See `apps/api/app/agents/README.md` for the full card trigger system (when each card type fires).

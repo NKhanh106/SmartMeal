@@ -153,10 +153,9 @@ function HistoryPageInner() {
           <p className="mt-1 text-sm text-slate-400">
             Start logging your meals to see your history here
           </p>
-          <Button className="mt-4 gap-2" onClick={() => window.location.href = "/upload"}>
-            <Plus className="h-4 w-4" />
-            Log your first meal
-          </Button>
+          <p className="mt-4 text-sm font-medium text-emerald-600">
+            Click the chat icon to ask the AI to log your meal!
+          </p>
         </div>
       )}
 

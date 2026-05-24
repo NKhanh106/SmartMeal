@@ -12,6 +12,7 @@ Trigger:
 """
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -89,6 +90,29 @@ URGENT_KEYWORDS = [
     "mờ mắt",
 ]
 
+NEGATION_PATTERNS = [
+    r"không\s+bị",       # "không bị đau ngực"
+    r"không\s+có",       # "không có triệu chứng"
+    r"chưa\s+bị",        # "chưa bị"
+    r"hết\s+rồi",        # "hết rồi"
+    r"không\s+còn",      # "không còn"
+    r"đã\s+khỏi",        # "đã khỏi"
+    r"bình\s+thường",    # "bình thường rồi"
+    r"không\s+đau",      # "không đau"
+]
+
+
+def _is_negated(keyword: str, message: str) -> bool:
+    """Check if keyword appears in a negated context."""
+    pos = message.lower().find(keyword.lower())
+    if pos == -1:
+        return False
+    context_window = message[max(0, pos - 30):pos]
+    for pattern in NEGATION_PATTERNS:
+        if re.search(pattern, context_window, re.IGNORECASE):
+            return True
+    return False
+
 
 class HealthMonitorAgent(BaseAgent):
     name = "health_monitor"
@@ -108,29 +132,33 @@ class HealthMonitorAgent(BaseAgent):
         try:
             # ── 1. Urgent keyword check (rule-based, before AI call) ─────────────
             msg_lower = context.current_message.lower()
-            if any(kw in msg_lower for kw in URGENT_KEYWORDS):
-                alert_text = "⚠️ URGENT: User reports serious symptoms. Recommend immediate medical attention."
+            urgent_keywords_found = [
+                kw for kw in URGENT_KEYWORDS
+                if kw in msg_lower and not _is_negated(kw, context.current_message)
+            ]
+            if urgent_keywords_found:
+                alert_text = f"⚠️ URGENT: User reports serious symptoms: {urgent_keywords_found}. Recommend immediate medical attention."
                 result = AgentResult(
                     agent_name=self.name,
                     success=True,
                     insight_type="health_status",
                     content={
-                        "alerts": ["URGENT: Triệu chứng nghiêm trọng — cần gặp bác sĩ ngay"],
-                        "current_status": {
-                            "overall": "urgent",
-                            "energy": "unknown",
-                            "digestion": "unknown",
-                            "musculoskeletal": "unknown",
-                            "metabolic": "unknown",
-                        },
+                        "current_status": {"overall": "urgent"},
+                        "alerts": [
+                            f"⚠️ Triệu chứng nghiêm trọng phát hiện: {', '.join(urgent_keywords_found)}. "
+                            f"Vui lòng gặp bác sĩ ngay lập tức."
+                        ],
                         "active_issues": [],
-                        "nutritional_needs": {},
+                        "nutritional_needs": {"increase": [], "decrease": [], "avoid": []},
                         "fitness_clearance": {
-                            "cleared_for": ["no_exercise"],
-                            "avoid": [],
-                            "reason": "Có triệu chứng cấp cứu — không tập luyện",
+                            "cleared_for": [],
+                            "avoid": ["all_exercise"],
+                            "reason": "Triệu chứng khẩn cấp — cần nghỉ ngơi hoàn toàn"
                         },
-                        "user_facing_note": "⚠️ Tôi khuyến cáo bạn nên gặp bác sĩ ngay lập tức cho các triệu chứng này.",
+                        "user_facing_note": (
+                            "Mình nhận thấy bạn đang có triệu chứng đáng lo ngại. "
+                            "Hãy gặp bác sĩ hoặc đến cơ sở y tế ngay nhé."
+                        )
                     },
                     confidence=1.0,
                     priority=1,
@@ -274,6 +302,11 @@ If there are no active health issues, return:
         """Build a concise health context string (max ~500 tokens)."""
         parts = []
 
+        # Demographics
+        if profile:
+            gender_val = profile.gender.value if hasattr(profile.gender, "value") else str(profile.gender)
+            parts.append(f"DEMOGRAPHICS:\nDOB: {profile.date_of_birth} | Gender: {gender_val} | Height: {profile.height_cm}cm | Weight: {profile.current_weight_kg}kg")
+
         # Body snapshot
         if body_snapshot:
             snapshot_parts = []
@@ -345,42 +378,105 @@ If there are no active health issues, return:
             new_snapshot["digestion_status"] = mapping.get(
                 current_status["digestion"], current_status["digestion"]
             )
-        if "musculoskeletal" in current_status:
-            if current_status["musculoskeletal"] == "injured":
-                new_snapshot["muscle_status"] = dict(
-                    existing_snapshot.get("muscle_status", {})
+
+        # H5: Record ACTUAL injury/soreness data from active_issues
+        active_issues = assessment.get("active_issues") or []
+        if current_status.get("musculoskeletal") in ("injured", "sore"):
+            existing_muscle = existing_snapshot.get("muscle_status", {})
+            existing_injuries = existing_muscle.get("injury_areas", [])
+            existing_sore = existing_muscle.get("sore_areas", [])
+
+            new_injuries = []
+            new_sore = []
+
+            AREA_KEYWORDS = {
+                "tay phải": "right_arm",
+                "tay trái": "left_arm",
+                "vai": "shoulder",
+                "lưng": "lower_back",
+                "cổ": "neck",
+                "đầu gối": "knee",
+                "chân": "leg",
+                "hông": "hip",
+                "bụng": "abdomen",
+                "ngực": "chest",
+            }
+
+            for issue in active_issues:
+                combined = (issue.get("issue", "") + " " + issue.get("description", "")).lower()
+                area = next(
+                    (v for k, v in AREA_KEYWORDS.items() if k in combined),
+                    "general"
                 )
-                new_snapshot["muscle_status"]["injury_areas"] = (
-                    existing_snapshot.get("muscle_status", {})
-                    .get("injury_areas", [])
-                )
+                severity = issue.get("severity", "mild")
+                if severity == "severe" or "chấn thương" in combined:
+                    if area not in existing_injuries:
+                        new_injuries.append(area)
+                else:
+                    if area not in existing_sore:
+                        new_sore.append(area)
+
+            new_snapshot["muscle_status"] = {
+                **existing_muscle,
+                "injury_areas": list(set(existing_injuries + new_injuries)),
+                "sore_areas": list(set(existing_sore + new_sore)),
+            }
 
         new_snapshot["last_updated"] = datetime.now(timezone.utc).isoformat()
         updates["body_snapshot"] = new_snapshot
 
-        # If user mentions recovery, mark events resolved in memory and persist
-        active_issues = assessment.get("active_issues") or []
+        # M3: Recovery event resolution — description-based matching
         if active_issues:
             existing_events = list(memory.health_events or []) if memory else []
-            resolved_any = False
-            for issue in active_issues:
-                desc = issue.get("issue", "")
-                if any(kw in desc.lower() for kw in ["khỏi", "hết", "đỡ", "bình thường"]):
-                    resolved_event_id = issue.get("event_id")
-                    if resolved_event_id:
-                        updated_events = []
-                        for event in existing_events:
-                            if event.get("event_id") == resolved_event_id:
-                                updated_events.append({**event, "resolved": True})
-                                resolved_any = True
-                            else:
-                                updated_events.append(event)
-                        existing_events = updated_events
-
-            if resolved_any:
-                updates["health_events"] = existing_events
+            resolved_events = self._resolve_matching_health_events(active_issues, existing_events)
+            if resolved_events != existing_events:
+                updates["health_events"] = resolved_events
 
         return updates
+
+    def _resolve_matching_health_events(
+        self,
+        active_issues: list,
+        existing_events: list,
+    ) -> list:
+        """
+        Mark health events as resolved when AI reports recovery.
+        Uses keyword and description matching instead of event_id.
+        """
+        RECOVERY_KEYWORDS = ["khỏi", "hết", "đỡ", "bình thường", "phục hồi", "ổn rồi"]
+
+        updated_events = []
+
+        for event in existing_events:
+            event_copy = dict(event)
+
+            if event_copy.get("resolved"):
+                updated_events.append(event_copy)
+                continue
+
+            event_category = event_copy.get("category", "")
+            event_desc = event_copy.get("description", "").lower()
+
+            should_resolve = False
+            for issue in active_issues:
+                issue_text = (issue.get("issue", "") + " " +
+                             issue.get("recommendation", "")).lower()
+                has_recovery = any(kw in issue_text for kw in RECOVERY_KEYWORDS)
+                matches_context = (
+                    event_category in issue_text or
+                    any(word in issue_text for word in event_desc.split()[:3])
+                )
+                if has_recovery and matches_context:
+                    should_resolve = True
+                    break
+
+            if should_resolve:
+                event_copy["resolved"] = True
+                event_copy["resolved_at"] = datetime.utcnow().isoformat()
+
+            updated_events.append(event_copy)
+
+        return updated_events
 
     def _status_to_priority(self, overall: str) -> int:
         """Map overall status string to numeric priority."""

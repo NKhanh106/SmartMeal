@@ -32,7 +32,6 @@ const navItems: NavItem[] = [
   { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { title: "Health Profile", href: "/profile", icon: User },
   { title: "Nutrition Goals", href: "/goals", icon: Target },
-  { title: "Upload Meal", href: "/upload", icon: Camera },
   { title: "Meal History", href: "/history", icon: History },
   { title: "Analytics", href: "/analytics", icon: BarChart2 },
   { title: "Recommendations", href: "/recommendations", icon: Zap },

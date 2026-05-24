@@ -65,8 +65,6 @@ async def create_meal_log_with_items(
         nutrition_goal_id=payload.nutrition_goal_id,
         meal_type=payload.meal_type,
         meal_time=meal_time,
-        image_url=payload.image_url,
-        image_storage_path=payload.image_storage_path,
         source=payload.source,
         note=payload.note,
         total_calories=0,

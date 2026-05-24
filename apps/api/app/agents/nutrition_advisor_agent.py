@@ -38,7 +38,7 @@ class NutritionAdvisorAgent(BaseAgent):
     ]
 
     async def run(self, context: AgentContext, db: AsyncSession) -> AgentResult:
-        run_id = self._log_start(
+        run = self._log_start(
             context=context,
             trigger="nutrition_keyword_detected",
             input_summary=context.current_message[:200],
@@ -128,6 +128,7 @@ class NutritionAdvisorAgent(BaseAgent):
                 is_meal_plan=is_meal_plan,
                 is_specific_food=is_specific_food,
                 profile=profile,
+                active_goal=context.active_goal,
             )
 
             # 10. Call AI
@@ -224,6 +225,16 @@ Schema:
 
     def _build_prompt(self, **kwargs) -> str:
         parts = [f"User question: {kwargs['user_message']}\n"]
+        
+        profile = kwargs.get("profile")
+        if profile:
+            gender_val = profile.gender.value if hasattr(profile.gender, "value") else str(profile.gender)
+            parts.append(f"DEMOGRAPHICS: Age: {profile.date_of_birth} | Gender: {gender_val} | Height: {profile.height_cm}cm | Weight: {profile.current_weight_kg}kg")
+            
+        active_goal = kwargs.get("active_goal")
+        if active_goal:
+            goal_type = active_goal.goal_type.value if hasattr(active_goal.goal_type, "value") else str(active_goal.goal_type)
+            parts.append(f"GOAL: {goal_type} | Daily Target: {active_goal.daily_calorie_target} kcal (P: {active_goal.protein_target_g}g, C: {active_goal.carb_target_g}g, F: {active_goal.fat_target_g}g)")
 
         if kwargs["hard_avoid"]:
             parts.append(f"HARD AVOID (allergies/restrictions): {', '.join(kwargs['hard_avoid'])}")
@@ -262,8 +273,36 @@ Schema:
             return data
         clean_suggestions = []
         for s in data["meal_suggestions"]:
-            suggestion_text = (s.get("suggestion", "") + s.get("preparation", "")).lower()
+            suggestion_text = (
+                s.get("suggestion", "") + " " +
+                s.get("preparation", "") + " " +
+                " ".join(s.get("alternatives", []))
+            ).lower()
             if not any(a.lower() in suggestion_text for a in hard_avoid):
                 clean_suggestions.append(s)
+
+        # Fallback if ALL suggestions were removed by allergen filtering
+        if not clean_suggestions and data.get("meal_suggestions"):
+            clean_suggestions = [
+                {
+                    "meal_type": "any",
+                    "suggestion": "Cháo trắng với rau củ luộc",
+                    "why": (
+                        "Món ăn an toàn, không chứa các thành phần gây dị ứng phổ biến, "
+                        "dễ tiêu và bổ dưỡng"
+                    ),
+                    "estimated_kcal": 200,
+                    "key_nutrients": ["carbohydrates", "fiber", "vitamins"],
+                    "preparation": (
+                        "Nấu cháo gạo trắng với nước, thêm cà rốt và khoai tây luộc"
+                    ),
+                    "alternatives": ["Bánh mì trắng", "Khoai lang hấp", "Bún tươi"]
+                }
+            ]
+            data["user_facing_summary"] = (
+                "Do các hạn chế dị ứng của bạn, mình gợi ý các món ăn đơn giản và an toàn. "
+                + (data.get("user_facing_summary") or "")
+            )
+
         data["meal_suggestions"] = clean_suggestions
         return data

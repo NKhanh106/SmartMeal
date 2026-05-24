@@ -37,6 +37,7 @@ from app.agents.nutrition_advisor_agent import NutritionAdvisorAgent
 from app.agents.web_researcher_agent import WebResearcherAgent
 from app.chatbot.context_builder import build_health_context, get_dietary_rules
 from app.core.config import settings
+from app.core.sanitize import sanitize_for_prompt
 from app.core.token_budget import build_context_within_budget, truncate_to_token_budget
 from app.models import User
 from app.models.chat import ChatMessage, ChatSession
@@ -77,19 +78,25 @@ class MultiAgentOrchestrator:
         run_id = str(uuid4())
         start_time = time.time()
 
+        # Sanitize user input at entry point — applies to ALL agents downstream
+        sanitized_message = sanitize_for_prompt(user_message, max_length=500)
+
         # Step 1: Load shared context
         memory = await get_or_create_memory(user.id, db)
         profile = await self._get_user_profile(user.id, db)
         history = await self._get_recent_messages(session_id, limit=10, db=db)
 
+        active_goal = await self._get_active_goal(user.id, db)
+
         context = AgentContext(
             user=user,
             session_id=str(session_id),
-            current_message=user_message,
+            current_message=sanitized_message,  # sanitized — safe for all agents
             conversation_history=history,
             profile=profile,
             run_id=run_id,
             memory=memory,
+            active_goal=active_goal,
         )
 
         # Step 2: Mark session needs_extraction = True
@@ -97,11 +104,11 @@ class MultiAgentOrchestrator:
 
         # Step 3: Fire extractor as background task (non-blocking)
         asyncio.create_task(
-            self._run_extractor_background(context, db)
+            self._run_extractor_background(context)
         )
 
         # Step 4: Decide which specialists to run
-        msg_lower = user_message.lower()
+        msg_lower = sanitized_message.lower()
         run_health    = self._needs_health_check(msg_lower, memory)
         run_nutrition = self._needs_nutrition_advice(msg_lower)
         run_fitness   = self._needs_fitness_advice(msg_lower)
@@ -111,64 +118,82 @@ class MultiAgentOrchestrator:
         agent_results: dict[str, AgentResult] = {}
 
         if run_health or run_nutrition or run_fitness or run_research:
-            tasks: dict[str, asyncio.Task] = {}
 
+            # ── PHASE 1: Run HealthMonitor FIRST (others depend on it) ──────────
             if run_health:
-                tasks["health"] = asyncio.create_task(
-                    HealthMonitorAgent().run(context, db)
-                )
+                try:
+                    health_result = await asyncio.wait_for(
+                        HealthMonitorAgent().run(context, db),
+                        timeout=4.0  # half the total budget
+                    )
+                    if health_result.success:
+                        agent_results["health"] = health_result
+                        if not hasattr(context, "agent_results"):
+                            context.agent_results = {}
+                        context.agent_results["health"] = health_result
+                        if health_result.memory_updates:
+                            await apply_memory_updates(
+                                context.user.id, health_result.memory_updates, db
+                            )
+                except asyncio.TimeoutError:
+                    logger.warning("[Orchestrator] HealthMonitor timed out after 4s")
+                except Exception as e:
+                    logger.error(f"[Orchestrator] HealthMonitor failed: {e}")
+
+            # ── PHASE 2: Run remaining agents IN PARALLEL ────────────────────────
+            phase2_tasks: dict[str, asyncio.coroutine] = {}
             if run_nutrition:
-                tasks["nutrition"] = asyncio.create_task(
-                    NutritionAdvisorAgent().run(context, db)
-                )
+                phase2_tasks["nutrition"] = NutritionAdvisorAgent().run(context, db)
             if run_fitness:
-                tasks["fitness"] = asyncio.create_task(
-                    FitnessCoachAgent().run(context, db)
-                )
+                phase2_tasks["fitness"] = FitnessCoachAgent().run(context, db)
             if run_research:
-                tasks["research"] = asyncio.create_task(
-                    WebResearcherAgent().run(context, db)
+                phase2_tasks["research"] = WebResearcherAgent().run(context, db)
+
+            if phase2_tasks:
+                # Create actual Task objects so we can inspect them on timeout
+                task_map: dict[str, asyncio.Task] = {
+                    key: asyncio.create_task(coro)
+                    for key, coro in phase2_tasks.items()
+                }
+
+                # Wait with timeout — returns (done, pending) sets
+                done, pending = await asyncio.wait(
+                    task_map.values(),
+                    timeout=6.0  # remaining budget
                 )
 
-            try:
-                done, pending = await asyncio.wait(
-                    tasks.values(),
-                    timeout=8.0,
-                    return_when=asyncio.ALL_COMPLETED,
-                )
-                # Cancel any tasks that didn't complete
+                # Cancel pending tasks cleanly
                 for task in pending:
                     task.cancel()
                     try:
                         await task
-                    except asyncio.CancelledError:
+                    except (asyncio.CancelledError, Exception):
                         pass
-            except asyncio.TimeoutError:
-                logger.warning("[Orchestrator] Agents timed out after 8s — proceeding with partial results")
 
-            # Collect results
-            for key, task in tasks.items():
-                if task.done() and not task.cancelled():
+                # Process completed tasks (even partial results are useful)
+                for key, task in task_map.items():
+                    if task not in done:
+                        continue
                     try:
                         result = task.result()
-                        if isinstance(result, Exception):
-                            logger.error(f"[Orchestrator] Agent '{key}' raised exception: {result}")
-                        elif result and result.success:
+                        if result and result.success:
                             agent_results[key] = result
-                            # Inject health result into context for downstream agents
                             if not hasattr(context, "agent_results"):
                                 context.agent_results = {}
                             context.agent_results[key] = result
-                            # Apply memory updates
                             if result.memory_updates:
                                 try:
-                                    await apply_memory_updates(user.id, result.memory_updates, db)
+                                    await apply_memory_updates(
+                                        context.user.id, result.memory_updates, db
+                                    )
                                 except Exception as e:
                                     logger.error(f"[Orchestrator] Memory update failed for {key}: {e}")
-                    except asyncio.CancelledError:
-                        logger.warning(f"[Orchestrator] Agent '{key}' was cancelled")
                     except Exception as e:
-                        logger.error(f"[Orchestrator] Agent '{key}' result error: {e}")
+                        logger.error(f"[Orchestrator] Agent '{key}' raised: {e}")
+
+                if pending:
+                    pending_keys = [k for k, t in task_map.items() if t in pending]
+                    logger.warning(f"[Orchestrator] {len(pending)} agent(s) timed out: {pending_keys}")
 
         # Step 6: Check if any agent suggests a clarification card
         suggested_card = self._get_highest_priority_card(agent_results)
@@ -180,19 +205,19 @@ class MultiAgentOrchestrator:
         synthesis = self._build_synthesis_context(agent_results, memory, profile)
 
         # Step 8: Final AI call — always happens even if all agents failed/skipped
-        system_prompt = self._build_final_system_prompt(synthesis, profile, context)
+        system_prompt = self._build_final_system_prompt(synthesis, profile, active_goal, context)
 
         try:
             async for chunk in self._stream_final_response(
                 system_prompt=system_prompt,
-                messages=history + [{"role": "user", "content": user_message}],
+                messages=history + [{"role": "user", "content": sanitized_message}],
                 db=db,
                 session_id=session_id,
             ):
                 yield chunk
         except Exception as e:
             logger.error(f"[Orchestrator] Final AI call failed: {e}")
-            yield f"data: Xin lỗi, đã có lỗi xảy ra. Vui lòng thử lại.\n\n"
+            yield f"data: {json.dumps({'error': 'Xin lỗi, đã có lỗi xảy ra. Vui lòng thử lại.'})}\n\n"
 
         total_ms = int((time.time() - start_time) * 1000)
         logger.info(f"[Orchestrator] Complete in {total_ms}ms — agents ran: {list(agent_results.keys())}")
@@ -282,9 +307,11 @@ class MultiAgentOrchestrator:
 
         return build_context_within_budget(sections, total_budget=1500)
 
-    def _build_final_system_prompt(self, synthesis: str, profile, context: AgentContext) -> str:
+    def _build_final_system_prompt(self, synthesis: str, profile, active_goal, context: AgentContext) -> str:
         health_ctx = ""
         dietary_rules = ""
+        demo_ctx = ""
+        goal_ctx = ""
         if profile:
             try:
                 health_ctx = build_health_context(profile)
@@ -295,6 +322,15 @@ class MultiAgentOrchestrator:
                     dietary_rules = "DIETARY CONSTRAINTS:\n" + "\n".join(f"- {r}" for r in rules)
             except Exception as e:
                 logger.warning(f"[Orchestrator] build_health_context error: {e}")
+            
+            # Demographics
+            user_name = context.user.full_name or "Người dùng"
+            gender_val = profile.gender.value if hasattr(profile.gender, "value") else str(profile.gender)
+            demo_ctx = f"Name: {user_name} | Gender: {gender_val} | Height: {profile.height_cm}cm | Weight: {profile.current_weight_kg}kg"
+            
+        if active_goal:
+            goal_type = active_goal.goal_type.value if hasattr(active_goal.goal_type, "value") else str(active_goal.goal_type)
+            goal_ctx = f"ACTIVE GOAL: {goal_type}\nTargets: {active_goal.daily_calorie_target}kcal/day (P:{active_goal.protein_target_g}g, C:{active_goal.carb_target_g}g, F:{active_goal.fat_target_g}g)\n"
 
         disclaimer = ""
         if profile and getattr(profile, "health_conditions", None):
@@ -308,9 +344,10 @@ class MultiAgentOrchestrator:
 Giao tiếp bằng tiếng Việt tự nhiên, thân thiện như một người bạn am hiểu — không cứng nhắc.
 
 THÔNG TIN NGƯỜI DÙNG:
+{demo_ctx}
 {health_ctx}
 {dietary_rules}
-
+{goal_ctx}
 PHÂN TÍCH TỪ HỆ THỐNG CHUYÊN GIA:
 {synthesis}
 
@@ -334,13 +371,21 @@ QUY TẮC TRẢ LỜI:
 
     # ─── Background Tasks ────────────────────────────────────────────────
 
-    async def _run_extractor_background(self, context: AgentContext, db: AsyncSession):
-        try:
-            result = await ExtractorAgent().run(context, db)
-            if result.memory_updates:
-                await apply_memory_updates(context.user.id, result.memory_updates, db)
-        except Exception as e:
-            logger.error(f"[Extractor background] failed: {e}")
+    async def _run_extractor_background(self, context: AgentContext):
+        """
+        Background extractor MUST create its own DB session.
+        The request session will be closed before this task completes.
+        """
+        from app.db.session import AsyncSessionLocal
+        async with AsyncSessionLocal() as bg_db:
+            try:
+                result = await ExtractorAgent().run(context, bg_db)
+                if result.memory_updates:
+                    await apply_memory_updates(context.user.id, result.memory_updates, bg_db)
+                await bg_db.commit()
+            except Exception:
+                await bg_db.rollback()
+                logger.exception(f"[Extractor background] failed for user {context.user.id}")
 
     # ─── Helpers ─────────────────────────────────────────────────────────
 
@@ -352,6 +397,19 @@ QUY TẮC TRẢ LỜI:
 
             result = await db.execute(
                 select(UserProfile).where(UserProfile.user_id == user_id)
+            )
+            return result.scalar_one_or_none()
+        except Exception:
+            return None
+
+    async def _get_active_goal(self, user_id, db: AsyncSession):
+        from app.models.nutrition_goal import NutritionGoal
+        try:
+            result = await db.execute(
+                select(NutritionGoal).where(
+                    NutritionGoal.user_id == user_id,
+                    NutritionGoal.is_active.is_(True),
+                )
             )
             return result.scalar_one_or_none()
         except Exception:
@@ -418,11 +476,11 @@ QUY TẮC TRẢ LỜI:
                 delta = chunk.choices[0].delta.content or ""
                 if delta:
                     full_response += delta
-                    yield f"data: {delta}\n\n"
+                    yield f"data: {json.dumps({'delta': delta})}\n\n"
 
         except asyncio.TimeoutError:
             logger.error("[Orchestrator] Streaming timed out after 60s")
-            yield "data: [Xin lỗi, phản hồi bị gián đoạn. Vui lòng thử lại.]\n\n"
+            yield f"data: {json.dumps({'error': 'Xin lỗi, phản hồi bị gián đoạn. Vui lòng thử lại.'})}\n\n"
         except Exception as e:
             logger.error(f"[Orchestrator] Streaming error: {e}")
             raise
@@ -441,4 +499,4 @@ QUY TẮC TRẢ LỜI:
             except Exception as e:
                 logger.warning(f"[Orchestrator] Failed to save assistant message: {e}")
 
-        yield "data: [DONE]\n\n"
+        yield f"data: {json.dumps({'done': True})}\n\n"

@@ -681,7 +681,7 @@ async def _bg_extractor_agent(
             context = AgentContext(
                 user=researcher_user,
                 session_id=str(session_id),
-                current_message=safe_content,
+                current_message=user_message,
                 conversation_history=conversation_history,
                 memory=memory,
             )
@@ -977,14 +977,6 @@ async def process_card_response_and_stream(
         injected_text = _build_card_response_text(original_card, card_response)
     else:
         injected_text = f"Card response: {card_response.model_dump_json()}"
-
-    await save_chat_message(
-        db=db,
-        session_id=session.id,
-        role="user",
-        content=injected_text,
-        metadata={"card_id": card_response.card_id, "message_type": "card_response"},
-    )
 
     # Also save as a card_response message type
     cr_msg = ChatMessage(

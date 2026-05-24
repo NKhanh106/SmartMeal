@@ -16,7 +16,7 @@ import hashlib
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -27,6 +27,7 @@ from app.agents.base import AgentContext, AgentResult, BaseAgent
 from app.ai.circuit_breaker import groq_circuit
 from app.core.cache import cache_get, cache_set
 from app.core.config import settings
+from app.core.sanitize import sanitize_for_prompt
 from app.models.agent_run import AgentRun
 
 logger = logging.getLogger(__name__)
@@ -146,8 +147,10 @@ Trả lời CHỈ bằng truy vấn tìm kiếm, không có giải thích."""
 
 
 def _build_research_cache_key(user_id: str, query: str) -> str:
-    """Create a deterministic cache key for a web research query."""
-    h = hashlib.sha256(f"{user_id}:{query}".encode()).hexdigest()[:16]
+    """Create a deterministic cache key for a web research query, fresh per day."""
+    today = date.today().isoformat()  # "2026-05-23"
+    raw = f"{user_id}:{query}:{today}"
+    h = hashlib.sha256(raw.encode()).hexdigest()[:16]
     return f"smartmeal:web_research:{h}"
 
 
@@ -515,7 +518,7 @@ class WebResearcherAgent(BaseAgent):
                 "source_domain": domain,
                 "source_type": quality.get("type", "unknown"),
                 "source_tier": quality.get("tier", 3),
-                "key_finding": finding.get("key_finding", ""),
+                "key_finding": sanitize_for_prompt(finding.get("key_finding", ""), max_length=300),
                 "relevance_score": float(finding.get("relevance_score", 0.5)),
                 "date_published": finding.get("date_published"),
                 "search_summary": finding.get("search_summary", ""),

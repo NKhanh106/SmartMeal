@@ -5,6 +5,7 @@ export interface ChatMessage {
   role: ChatRole;
   content: string;
   timestamp: Date;
+  created_at?: string; // from API response
   /** True when the message is still streaming from the SSE endpoint */
   isStreaming?: boolean;
   /** True when this message represents a failed/errored request */

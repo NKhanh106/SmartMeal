@@ -1,218 +1,227 @@
-# SmartMeal API — Backend Server
+# SmartMeal API
 
-## Mục đích
+FastAPI backend powering the SmartMeal platform. Handles authentication, meal logging, nutrition goals, fitness tracking, and the multi-agent AI chatbot system.
 
-Đây là **backend server** của ứng dụng SmartMeal — một hệ thống web đa ngôn ngữ (Tiếng Việt + English) hỗ trợ quản lý dinh dưỡng, theo dõi tiến trình thể chất và tập luyện với sự trợ giúp của AI. Backend được xây dựng bằng **FastAPI** (Python 3.12+) kết hợp **PostgreSQL**, hỗ trợ async toàn bộ.
-
-## Tính năng cốt lõi
-
-| Tính năng | Mô tả |
-|------------|--------|
-| **Auth** | Đăng ký / Đăng nhập / JWT access + refresh token, bcrypt password hashing |
-| **User Profile** | Hồ sơ thể chất (chiều cao, cân nặng, % mỡ, vòng đo, mức vận động, chế độ ăn, dị ứng) |
-| **Nutrition Goals** | Tính BMR / TDEE / BMI theo công thức Mifflin-St Jeor, đặt mục tiêu calo/macro |
-| **Meal Logs** | Ghi nhận bữa ăn kèm chi tiết món ăn, tính calo/macro |
-| **Food Nutrition DB** | Cơ sở dữ liệu thực phẩm Việt Nam + USDA, tìm kiếm, CRUD |
-| **Dashboard** | Thống kê calo/macro theo ngày và tuần, timezone-aware |
-| **Progress Logs** | Nhật ký theo dõi cân nặng, % mỡ, số đo cơ thể, ảnh tiến bộ |
-| **Workout Plans** | Kế hoạch tập luyện (1 active plan/user), quản lý bài tập |
-| **AI Meal Update** | Nhận diện món ăn từ ảnh (Gemini Vision) → tự động ghi nhận bữa ăn |
-| **AI Daily Planner** | Sinh gợi ý lịch trình ăn uống + tập luyện cho ngày mới (Groq/Gemini) |
-| **AI Chatbot** | Trợ lý AI tương tác theo ngữ cảnh (profile, goals, meal history, insights) |
-| **Image Upload** | Upload ảnh với metadata, tự động dọn dẹp theo TTL |
-
-## Công nghệ sử dụng
-
-| Category | Công nghệ | Giải thích |
-|----------|-----------|------------|
-| **Framework** | FastAPI | Web framework async, auto-generated OpenAPI docs, type-safe |
-| **Language** | Python 3.12+ | Hỗ trợ async/await toàn bộ |
-| **Database** | PostgreSQL 15+ | Cơ sở dữ liệu quan hệ mạnh mẽ |
-| **ORM** | SQLAlchemy 2.0 (async) | Async ORM với SQLAlchemy 2.0 style (Mapped, mapped_column) |
-| **Migrations** | Alembic | Quản lý phiên bản database schema |
-| **Validation** | Pydantic v2 | Xác thực dữ liệu và serialization |
-| **Auth** | JWT (python-jose) + Bcrypt (passlib) | Xác thực và băm mật khẩu |
-| **AI** | Google Gemini + Groq | Nhận diện ảnh, sinh text, chatbot |
-| **Cache** | Redis (redis-py async) | Cache kết quả AI, tránh gọi trùng |
-| **Rate Limit** | slowapi | Giới hạn request trên mỗi IP |
-| **Scheduler** | APScheduler | Chạy job dọn dẹp ảnh định kỳ |
-| **Testing** | pytest + pytest-asyncio | Unit tests async |
-| **Linting** | ruff | Fast Python linter |
-| **Container** | Docker | Triển khai containerized |
-
-## Cấu trúc thư mục
+## Architecture
 
 ```
-apps/api/
-├── app/                         # Toàn bộ source code
-│   ├── main.py                 # Entry point, CORS, router registration, lifespan
-│   ├── api/                    # API Routers (endpoints)
-│   │   ├── deps.py            # Auth dependencies: get_current_user, ensure_user_access
-│   │   └── v1/               # v1 Endpoints (auth, profiles, meals, AI,...)
-│   ├── models/                 # SQLAlchemy ORM Models (16 bảng)
-│   ├── schemas/                # Pydantic Schemas (validation & serialization)
-│   ├── services/               # Business Logic Layer
-│   ├── ai/                     # AI Provider Abstraction (Factory pattern)
-│   │   ├── base.py            # Abstract AIProvider interface
-│   │   ├── factory.py         # Factory: chọn provider theo config
-│   │   └── providers/          # Implementations: Gemini, Groq
-│   ├── chatbot/               # AI Chatbot System
-│   │   ├── service.py         # Core chatbot logic
-│   │   ├── context_builder.py # Xây dựng context từ user data
-│   │   ├── context_policy.py  # Quy tắc truy cập dữ liệu
-│   │   ├── prompts.py         # System prompts
-│   │   └── utils.py           # Helper functions
-│   ├── core/                   # Configuration & Security
-│   │   ├── config.py          # Pydantic Settings (tất cả env vars)
-│   │   ├── security.py        # JWT helpers, password hashing
-│   │   ├── cache.py           # Redis cache wrapper
-│   │   └── rate_limiter.py    # Rate limiter setup
-│   └── db/                     # Database Connection
-│       └── session.py          # Async engine, session factory, Base
-├── alembic/                    # Database migrations
-│   ├── env.py                 # Migration environment
-│   └── versions/              # Migration scripts (4 migrations)
-├── scripts/                    # Utility scripts
-│   ├── seed_food_data.py     # Seed ~65 món ăn Việt Nam
-│   ├── seed_demo_data.py     # Seed 10 user với 10 ngày dữ liệu
-│   └── cleanup_expired_images.py # Cleanup script
-├── tests/                     # Unit tests (pytest)
-├── Dockerfile                 # Docker container (Python 3.12-slim)
-├── Makefile                  # Dev commands
-├── requirements.txt           # Python dependencies (redis, hiredis)
-├── pyproject.toml            # Python project config (pytest, ruff)
-├── alembic.ini              # Alembic configuration
-└── .env.example             # Environment variables template
+HTTP Request
+     │
+     ▼
+Router (api/v1/) ─── Authentication + Rate Limiting middleware
+     │
+     ▼
+Handler (endpoint)
+     │
+     ▼
+Service Layer (services/)
+     │
+     ├── Read/Write ──→ Models (SQLAlchemy async ORM)
+     │
+     └── Agent Calls ──→ Multi-Agent System
+                              │
+                              ├── Memory Service (Redis + PostgreSQL)
+                              ├── AI Providers (Groq + Gemini)
+                              └── Agent Orchestrator
 ```
 
-## Cách chạy
+## Technology Deep Dive
 
-### Yêu cầu hệ thống
+### FastAPI
 
-- Python >= 3.12
-- PostgreSQL >= 15
-- Redis (optional, app chạy degraded mode nếu không có)
-- Docker (optional)
+FastAPI is used for its async-first design, automatic OpenAPI generation, and Pydantic integration. All route handlers are `async def`, allowing the server to handle thousands of concurrent connections without thread pools. The `lifespan` context manager handles startup (Redis warmup, scheduler start) and shutdown (scheduler stop, Redis close).
 
-### Cài đặt & Khởi chạy
+API docs are automatically generated and exposed at `/docs` and `/redoc` in development. They are disabled in production (`ENVIRONMENT=production`) by setting `docs_url=None`, `redoc_url=None`, and `openapi_url=None` on the FastAPI app.
+
+### SQLAlchemy 2.0 Async
+
+All database operations use `AsyncSession` from `sqlalchemy.ext.asyncio`. Each request gets its own session injected via FastAPI's `Depends(get_db)` pattern. Sessions are committed explicitly in handlers — no auto-commit. Background tasks (like the Extractor agent) create their own `AsyncSessionLocal` sessions so they don't hold onto the request session.
+
+```python
+async with AsyncSessionLocal() as session:
+    result = await session.execute(select(User).where(User.id == user_id))
+```
+
+ORM models use `Mapped[]` type annotations with SQLAlchemy 2.0 declarative style. Relationships are defined with `relationship()`, JSONB columns store flexible health/nutrition data.
+
+### Alembic Migrations
+
+Migrations live in `migrations/versions/` and are managed with Alembic. The migration environment is configured in `migrations/env.py` with async support.
 
 ```bash
-# 1. Cài dependencies
-cd apps/api
-pip install -r requirements.txt
+# Create a new migration
+alembic revision --autogenerate -m "add_custom_field"
 
-# 2. Tạo file .env từ template
-cp .env.example .env
-# Chỉnh sửa .env: điền DATABASE_URL, SECRET_KEY, GEMINI_API_KEY, GROQ_API_KEY
-
-# 3. Chạy database migrations
+# Apply all pending migrations
 alembic upgrade head
 
-# 4. Seed dữ liệu thực phẩm (tùy chọn, không chạy trong production)
-make seed  # hoặc: python scripts/seed_food_data.py
+# Rollback last migration
+alembic downgrade -1
 
-# 5. Chạy development server
-make dev   # hoặc: uvicorn app.main:app --reload --port 8000
+# Show current migration
+alembic current
 ```
 
-### Docker
+**Never delete migration files.** Even if a migration was autogenerated incorrectly, create a new migration to fix it. Deleted migrations cause divergence in deployment environments where the migration history differs from production.
+
+### JWT Authentication
+
+Access tokens expire in 24 hours, refresh tokens in 7 days. Tokens are created in `core/security.py` using `python-jose`. The `get_current_user` dependency decodes the Bearer token from the `Authorization` header and injects the `User` object into route handlers.
+
+Refresh token rotation is implemented: when refreshing, the old refresh token is invalidated and a new pair is issued. Invalidated tokens are tracked in Redis for the duration of their validity period.
+
+Brute-force protection is implemented in `core/security.py` using Redis. After 5 failed login attempts, the account is locked for 5 minutes. The lockout is automatically cleared on a successful login.
+
+### Redis
+
+Redis is used for four purposes:
+
+1. **AI response caching** — Chat responses and daily plans are cached to reduce API costs and latency. TTL is 1 hour for chat, 12 hours for daily plans.
+2. **Session data** — Refresh token invalidation lists.
+3. **Rate limiting** — Per-user and per-IP request counts tracked with TTL.
+4. **Circuit breaker state** — AI provider health status (CLOSED/OPEN/HALF_OPEN).
+
+Redis is optional — the app starts and functions without it, falling back to uncached behavior with a warning log. See `core/cache.py`.
+
+### Pydantic v2
+
+All request and response schemas are Pydantic models. Schemas are organized by resource with separate `Create`, `Update`, and `Response` models. The `BaseModel.model_validate()` and `.model_dump()` API (v2 style) is used throughout.
+
+Profile schemas use `field_validator` for string normalization and `computed_field` for derived values like BMI.
+
+## Directory Structure
+
+```
+app/
+├── main.py              # FastAPI app, CORS, rate limiter, lifespan
+│
+├── agents/              # Multi-agent AI system (see agents/README.md)
+│   ├── base.py          # BaseAgent abstract class
+│   ├── multi_agent_orchestrator.py
+│   ├── extractor_agent.py
+│   ├── health_monitor_agent.py
+│   ├── nutrition_advisor_agent.py
+│   ├── fitness_coach_agent.py
+│   ├── web_researcher_agent.py
+│   └── memory_service.py
+│
+├── api/v1/              # REST API endpoints
+│   ├── auth.py          # Login, register, token refresh
+│   ├── user_profiles.py # Profile CRUD
+│   ├── nutrition_goals.py
+│   ├── food_nutrition.py # USDA food search
+│   ├── meal_logs.py     # Meal logging
+│   ├── dashboard.py      # Dashboard data
+│   ├── progress_logs.py
+│   ├── workout_plans.py
+│   ├── ai_daily_planner.py
+│   ├── ai_chatbot.py    # SSE streaming chatbot
+│   ├── ai_meal_update.py
+│   ├── uploads.py       # Image uploads
+│   ├── admin_agents.py   # Agent monitoring (admin only)
+│   └── health.py        # Health/readiness probes
+│
+├── core/                # Infrastructure (see core/README.md)
+│   ├── config.py        # Pydantic settings from env
+│   ├── security.py       # JWT + bcrypt + brute-force protection
+│   ├── rate_limiter.py   # SlowAPI rate limiter
+│   ├── cache.py          # Redis caching
+│   ├── token_budget.py   # Vietnamese-aware token estimation
+│   ├── sanitize.py       # Input sanitization
+│   └── constants.py
+│
+├── models/              # SQLAlchemy ORM models
+│   ├── user.py
+│   ├── user_profile.py
+│   ├── meal.py
+│   ├── workout.py
+│   ├── chat.py
+│   ├── learning.py
+│   ├── enums.py
+│   └── __init__.py      # exports all models
+│
+├── schemas/             # Pydantic request/response schemas
+│   ├── user.py
+│   ├── profile.py
+│   ├── meal.py
+│   ├── chat.py
+│   └── ...
+│
+├── services/            # Business logic layer
+│   ├── meal_service.py
+│   ├── dashboard_service.py
+│   ├── nutrition_service.py
+│   ├── workout_service.py
+│   └── ...
+│
+├── chatbot/             # Chat pipeline
+│   ├── service.py       # Chat message storage + SSE
+│   ├── card_triggers.py # Hard-rule card firing logic
+│   └── context_builder.py # Health context string builder
+│
+└── db/
+    ├── session.py      # AsyncSession factory
+    └── seeds/           # Database seed scripts
+```
+
+## Key Patterns
+
+### Request Lifecycle
+
+```
+Request → Rate Limiter (SlowAPI middleware)
+       → Authentication (get_current_user dependency)
+       → Handler (async def endpoint)
+       → Service Layer
+       → ORM (AsyncSession)
+       → DB commit
+       → Response
+```
+
+Background tasks (agent calls) are fire-and-forget using `asyncio.create_task()`. They create their own `AsyncSession` so the request session can close independently.
+
+### Error Handling
+
+The `AppError` class in `core/errors.py` provides factory methods for standardized errors:
+
+```python
+raise AppError.bad_request("Invalid calorie value", details={...})
+raise AppError.not_found("User not found")
+raise AppError.forbidden("Admin access required")
+```
+
+These map to consistent HTTP status codes and JSON error shapes across all endpoints.
+
+### Background Tasks
+
+Agent execution runs as a background task inside the SSE stream handler:
+
+```python
+asyncio.create_task(orchestrator.process(...))
+```
+
+Background tasks create their own `AsyncSession` via `AsyncSessionLocal()`. This ensures the request session can close after headers are sent while the agents continue running. Background task errors are caught and logged — they never crash the stream.
+
+## Running Locally
 
 ```bash
-docker build -t smartmeal-api apps/api/
-docker run -p 8000:8000 --env-file apps/api/.env smartmeal-api
+cd apps/api
+pip install -r requirements.txt
+cp .env.example .env  # Configure DATABASE_URL, REDIS_URL, API keys
+alembic upgrade head
+uvicorn app.main:app --reload --port 8000
 ```
 
-### Lệnh Makefile
+API docs at `http://localhost:8000/docs`.
+
+## Running Tests
 
 ```bash
-make install   # Cài dependencies
-make dev       # Chạy dev server với hot-reload
-make migrate   # Chạy Alembic migrations
-make seed      # Seed food data (development only)
-make test      # Chạy pytest
-make lint      # Chạy ruff linter
+cd apps/api
+python -m pytest tests/ -q --tb=short
+
+# With coverage
+python -m pytest tests/ --cov=app --cov-report=term-missing
 ```
 
-## API Documentation
-
-Khi server đang chạy:
-- **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
-- **Health check**: http://localhost:8000/health
-
-## Database Schema (16 bảng)
-
-```
-users                          -- Tài khoản người dùng (soft delete)
-user_profiles                  -- Hồ sơ thể chất (1:1 với users)
-nutrition_goals                -- Mục tiêu dinh dưỡng (1 active/user)
-food_nutrition                 -- Cơ sở dữ liệu thực phẩm
-meal_logs                      -- Nhật ký bữa ăn
-meal_items                     -- Chi tiết món trong bữa ăn
-ai_analysis_logs               -- Log gọi AI API
-daily_recommendations          -- Kết quả AI Daily Planner
-progress_logs                  -- Nhật ký theo dõi thể chất
-workout_plans                  -- Kế hoạch tập luyện (1 active/user)
-workout_items                  -- Bài tập trong kế hoạch
-chat_sessions                  -- Phiên chat với AI Coach
-chat_messages                  -- Tin nhắn trong phiên chat
-uploaded_images                -- Metadata ảnh upload
-conversation_insights          -- Insights trích xuất từ cuộc trò chuyện
-```
-
-## Environment Variables (.env.example)
-
-```env
-ENVIRONMENT=development
-SECRET_KEY=change-me-use-a-long-random-string
-
-# Database
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/smartmeal
-
-# AI Providers
-AI_MEAL_PROVIDER=gemini
-AI_CHAT_PROVIDER=groq
-AI_PLANNER_PROVIDER=groq
-GEMINI_API_KEY=
-GEMINI_MODEL=gemini-2.5-flash
-GROQ_API_KEY=
-GROQ_TEXT_MODEL=llama-3.3-70b-versatile
-GROQ_VISION_MODEL=meta-llama/llama-4-scout-17b-16e-instruct
-
-# Redis
-REDIS_URL=redis://localhost:6379/0
-```
-
-## Image Storage System
-
-```
-DB: uploaded_images (metadata only)
-Disk: uploads/{user_id}/{image_type}/{image_id}.{ext}
-URL:  /uploads/{user_id}/{image_type}/{image_id}.{ext}
-```
-
-| Type | TTL | Auto-delete |
-|------|-----|-------------|
-| `avatar` | Never | No |
-| `meal` | 7 days | Yes |
-| `temporary` | 1 day | Yes |
-| `progress` | Never | No |
-
-## Testing
-
-```bash
-# Chạy tất cả tests
-make test
-
-# Test cụ thể
-pytest tests/test_meal_service.py -v
-```
-
-## Bảo mật
-
-- Mật khẩu được hash bằng **bcrypt**
-- JWT tokens (HS256) cho xác thực API
-- Role-based access control: `user`, `admin`
-- Production validator: từ chối chạy nếu SECRET_KEY yếu
-- Rate limiting trên các endpoint AI
-- Soft delete cho User (không hard delete)
+Test files are in `tests/` and cover auth, meal extraction, health context building, chat cards, and the orchestrator. Tests use `pytest-asyncio` for async test functions and `unittest.mock` for agent mocking.

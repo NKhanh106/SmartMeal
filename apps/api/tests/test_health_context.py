@@ -200,7 +200,7 @@ class TestBuildHealthContext:
         )
         ctx = build_health_context(profile)
         assert "DIETARY CONSTRAINTS" in ctx
-        assert "limit_simple_carbs" in ctx
+        assert "Limit Simple Carbs" in ctx
 
 
 class MockValue:

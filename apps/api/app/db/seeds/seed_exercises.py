@@ -8,11 +8,14 @@ Or import and call seed_exercises() directly.
 """
 
 import asyncio
+import logging
 from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import engine, AsyncSessionLocal
+
+logger = logging.getLogger(__name__)
 
 
 def _infer_sets(exercise: dict) -> int:
@@ -114,10 +117,10 @@ async def seed_exercises(session: AsyncSession) -> int:
 
 
 async def main() -> None:
-    print("Seeding exercises into database...")
+    logger.info("Seeding exercises into database...")
     async with AsyncSessionLocal() as session:
         added = await seed_exercises(session)
-        print(f"✅ Seeded {added} exercises")
+        logger.info("Seeded %d exercises", added)
     await engine.dispose()
 
 

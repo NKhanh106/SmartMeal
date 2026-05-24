@@ -75,7 +75,7 @@ export function ChatMessageList({
         )}
 
         <AnimatePresence>
-          {isTyping && (
+          {isTyping && !messages.some(m => m.isStreaming) && (
             <div className="flex gap-3 max-w-[85%] mr-auto">
               {/* Bot avatar */}
               <div className="h-8 w-8 rounded-full bg-emerald-50 border border-emerald-100 text-emerald-600 flex items-center justify-center flex-shrink-0">

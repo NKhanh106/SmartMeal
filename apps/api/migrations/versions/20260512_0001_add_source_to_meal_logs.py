@@ -39,6 +39,12 @@ def upgrade() -> None:
         END$$;
     """)
 
+    # Drop the string default before altering type
+    op.execute("""
+        ALTER TABLE meal_logs
+        ALTER COLUMN source DROP DEFAULT
+    """)
+
     # Alter column to use enum
     op.execute("""
         ALTER TABLE meal_logs

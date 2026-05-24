@@ -10,8 +10,25 @@ from __future__ import annotations
 
 MAX_CONTEXT_TOKENS = 4000  # leave room for output
 
-# Approximate: 4 chars ≈ 1 token (conservative for Vietnamese/English mixed text)
-_CHARS_PER_TOKEN = 4
+# Vietnamese text uses ~2.5-3 chars/token with subword tokenization
+# Using 3 as conservative-but-accurate estimate for Vietnamese
+_CHARS_PER_TOKEN = 3
+
+
+def estimate_tokens(text: str) -> int:
+    """
+    Estimate token count for text.
+    Vietnamese averages ~3 chars/token, English ~4.
+    """
+    vietnamese_chars = sum(1 for c in text if ord(c) > 127)
+    ratio = vietnamese_chars / max(len(text), 1)
+
+    if ratio > 0.3:  # Mostly Vietnamese
+        chars_per_token = 3.0
+    else:  # Mostly English
+        chars_per_token = 4.0
+
+    return int(len(text) / chars_per_token)
 
 
 def truncate_to_token_budget(

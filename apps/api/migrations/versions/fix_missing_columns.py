@@ -18,18 +18,17 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Add last_activity_at to chat_sessions (from 20260511_0001)
-    op.add_column(
-        "chat_sessions",
-        sa.Column("last_activity_at", postgresql.TIMESTAMP(timezone=True), nullable=True),
-    )
+    # Add last_activity_at to chat_sessions (from 20260511_0001) - skip if exists
+    op.execute("""
+        ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMP WITH TIME ZONE
+    """)
     op.execute("""
         UPDATE chat_sessions
         SET last_activity_at = COALESCE(last_message_at, updated_at)
         WHERE last_activity_at IS NULL
     """)
 
-    # Add source to meal_logs (from 20260512_0001)
+    # Add source to meal_logs (from 20260512_0001) - skip if exists
     op.execute("""
         DO $$
         BEGIN
@@ -38,18 +37,12 @@ def upgrade() -> None:
             END IF;
         END$$;
     """)
-    op.add_column(
-        "meal_logs",
-        sa.Column(
-            "source",
-            postgresql.ENUM('manual', 'chat_extraction', 'chat_command', name='meal_log_source', create_type=False),
-            nullable=False,
-            server_default='manual'
-        ),
-    )
+    op.execute("""
+        ALTER TABLE meal_logs ADD COLUMN IF NOT EXISTS source meal_log_source NOT NULL DEFAULT 'manual'
+    """)
 
 
 def downgrade() -> None:
-    op.drop_column("chat_sessions", "last_activity_at")
-    op.drop_column("meal_logs", "source")
+    op.execute("ALTER TABLE chat_sessions DROP COLUMN IF EXISTS last_activity_at")
+    op.execute("ALTER TABLE meal_logs DROP COLUMN IF EXISTS source")
     op.execute("DROP TYPE IF EXISTS meal_log_source")

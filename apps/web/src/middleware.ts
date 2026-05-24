@@ -4,7 +4,6 @@ import type { NextRequest } from "next/server";
 const PROTECTED_ROUTES = [
   "/dashboard",
   "/history",
-  "/upload",
   "/profile",
   "/goals",
   "/recommendations",
@@ -47,6 +46,6 @@ export function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!api|_next/static|_next/image|favicon.ico|uploads).*)",
+    "/((?!api|_next/static|_next/image|favicon.ico).*)",
   ],
 };

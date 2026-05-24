@@ -1,146 +1,193 @@
-# Thư mục `api/v1/` — API v1 Endpoints
+# API Endpoints (v1)
 
-## Mục đích
+REST API for SmartMeal. All endpoints require JWT authentication unless marked public.
 
-Chứa toàn bộ **HTTP API endpoints** của backend SmartMeal. Mỗi file Python tương ứng với một nhóm chức năng riêng biệt. Tất cả các router đều được đăng ký trong `main.py` với prefix `/api/v1`.
+Base URL: `/api/v1`
 
-## Kiến trúc
+## Authentication
+
+Authentication uses Bearer JWT tokens. Access tokens expire after 24 hours, refresh tokens after 7 days.
 
 ```
-HTTP Request
-    │
-    ▼
-FastAPI Router (api/v1/*.py)
-    │
-    ▼
-Dependency Injection (deps.py: get_current_user, get_db)
-    │
-    ▼
-Service Layer (services/*.py: business logic)
-    │
-    ▼
-Models (models/*.py: ORM)
-    │
-    ▼
-Database (PostgreSQL)
+POST /auth/login        → { access_token, refresh_token, token_type }
+POST /auth/refresh      → { access_token, ... } (using refresh_token)
+POST /auth/register     → { user, ... }
+POST /auth/logout       → { message }
 ```
 
-## Danh sách Routers
-
-### Auth & User Management
-
-| File | Prefix | Auth | Mô tả |
-|------|--------|------|--------|
-| `auth.py` | `/api/v1/auth` | Partial | Đăng ký, đăng nhập, refresh token, thông tin user hiện tại |
-| `user_profiles.py` | `/api/v1/user-profiles` | Required | CRUD hồ sơ thể chất (chiều cao, cân nặng, mỡ, vòng đo, mức vận động, chế độ ăn) |
-
-### Nutrition & Food
-
-| File | Prefix | Auth | Mô tả |
-|------|--------|------|--------|
-| `nutrition_goals.py` | `/api/v1/nutrition-goals` | Required | Tính BMR/TDEE/BMI, tạo & cập nhật mục tiêu dinh dưỡng |
-| `food_nutrition.py` | `/api/v1/food-nutrition` | Required | Tra cứu, tìm kiếm, CRUD thực phẩm trong database |
-| `meal_logs.py` | `/api/v1/meal-logs` | Required | CRUD meal logs (bữa ăn), xem lịch sử theo ngày |
-| `dashboard.py` | `/api/v1/dashboard` | Required | Thống kê dinh dưỡng ngày/tuần (tổng calo, macro, % hoàn thành mục tiêu) |
-
-### Fitness & Progress
-
-| File | Prefix | Auth | Mô tả |
-|------|--------|------|--------|
-| `workout_plans.py` | `/api/v1/workout-plans` | Required | CRUD kế hoạch tập luyện (1 active plan mỗi user), quản lý bài tập |
-| `progress_logs.py` | `/api/v1/progress-logs` | Required | Nhật ký theo dõi cân nặng và số đo cơ thể theo ngày |
-
-### AI Features
-
-| File | Prefix | Auth | Mô tả |
-|------|--------|------|--------|
-| `ai_meal_update.py` | `/api/v1/ai/meal-update` | Required | Nhận diện món ăn từ ảnh (Gemini Vision), xác nhận & lưu meal |
-| `ai_daily_planner.py` | `/api/v1/ai/daily-planner` | Required | AI sinh gợi ý lịch trình ăn uống + tập luyện cho ngày mới |
-| `ai_chatbot.py` | `/api/v1/ai/chat` | Required | Chatbot AI: tạo session, gửi nhận tin nhắn, streaming response |
-
-### System
-
-| File | Prefix | Auth | Mô tả |
-|------|--------|------|--------|
-| `uploads.py` | `/api/v1/uploads` | Required | Upload ảnh (avatar/meal/temporary/progress), xem danh sách, xóa |
-| `health.py` | `/` hoặc `/health` | Public | Health check endpoint (không cần auth) |
-
-## Cách đọc một Router file
-
-1. Đọc imports và decorator `@router.post/get/put/delete`
-2. Đọc function signature: `current_user`, path params, query params, body params
-3. Đọc response model (Pydantic schema)
-4. Đọc service layer bên dưới (trong `services/`)
-
-```python
-@router.post("/meal-logs", response_model=MealLogResponse, status_code=status.HTTP_201_CREATED)
-@limiter.limit("10/minute")
-async def create_meal(
-    payload: MealLogCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Ghi nhận một bữa ăn mới."""
-    meal = await create_meal_log_with_items(db, payload, current_user.id)
-    return meal
+All protected endpoints require the header:
+```
+Authorization: Bearer <access_token>
 ```
 
-## Authentication Flow
+Refresh tokens use rotation — each refresh issues a new pair and invalidates the old refresh token.
 
-1. Client gửi request kèm `Authorization: Bearer <JWT_token>`
-2. `oauth2_scheme` (FastAPI Security) trích xuất token từ header
-3. `deps.get_current_user()` decode JWT, lấy `user_id` từ payload
-4. Query database để lấy `User` object
-5. Trả về user cho endpoint, hoặc raise `401 Unauthorized` / `403 Forbidden`
+## Endpoint Reference
 
-## Rate Limiting
+### Auth (`/auth`)
 
-Một số endpoint có rate limit:
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| POST | `/auth/register` | Create new account | Public |
+| POST | `/auth/login` | Login, get tokens | Public |
+| POST | `/auth/refresh` | Refresh access token | Public |
+| POST | `/auth/logout` | Invalidate tokens | Required |
 
-| Endpoint | Limit | Áp dụng |
-|----------|-------|----------|
-| `POST /ai/meal-update/preview` | 10/min | Mỗi IP |
-| `POST /ai/meal-update/recognize-image` | 10/min | Mỗi IP |
-| `POST /ai/chat/sessions/{id}/messages` | 20/min | Mỗi IP |
-| `POST /ai/chat/sessions/{id}/messages/stream` | 20/min | Mỗi IP |
+### User Profiles (`/profiles`)
 
-Khi vượt rate limit → trả về `429 Too Many Requests`.
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| GET | `/profiles/me` | Get current user profile | Required |
+| PUT | `/profiles/me` | Update profile | Required |
+| PUT | `/profiles/me/health-conditions` | Update health conditions | Required |
+| PUT | `/profiles/me/preferences` | Update preferences | Required |
 
-## API Documentation
+### Meal Logs (`/meal-logs`)
 
-Khi server đang chạy:
-- **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
-- **OpenAPI JSON**: http://localhost:8000/openapi.json
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| GET | `/meal-logs` | List meal logs | Required |
+| POST | `/meal-logs` | Create meal log | Required |
+| GET | `/meal-logs/{id}` | Get meal log | Required |
+| PUT | `/meal-logs/{id}` | Update meal log | Required |
+| DELETE | `/meal-logs/{id}` | Delete meal log | Required |
+| GET | `/meal-logs/today` | Today's meals | Required |
 
-## Error Handling
+Source field tracks how the meal was logged: `manual` (user entry), `chat_extraction` (AI extracted from chat), `chat_command` (AI logged via command).
 
-Tất cả endpoints trả về error response theo format chuẩn FastAPI:
+### Nutrition Goals (`/nutrition-goals`)
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| GET | `/nutrition-goals/active` | Get active goal | Required |
+| POST | `/nutrition-goals` | Create goal | Required |
+| PUT | `/nutrition-goals/{id}` | Update goal | Required |
+
+### Dashboard (`/dashboard`)
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| GET | `/dashboard/daily?date=` | Daily nutrition summary | Required |
+| GET | `/dashboard/weekly?end_date=` | 7-day nutrition summary | Required |
+
+### Food Nutrition (`/food-nutrition`)
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| GET | `/food-nutrition/search?q=` | Search USDA food database | Required |
+| GET | `/food-nutrition/{id}` | Get food details | Required |
+
+### Workout Plans (`/workout-plans`)
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| GET | `/workout-plans` | List workout plans | Required |
+| POST | `/workout-plans` | Create plan | Required |
+| GET | `/workout-plans/{id}` | Get plan | Required |
+| PUT | `/workout-plans/{id}` | Update plan | Required |
+
+### Progress Logs (`/progress-logs`)
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| GET | `/progress-logs` | List progress entries | Required |
+| POST | `/progress-logs` | Create entry | Required |
+
+### AI Chatbot (`/chat`)
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| GET | `/chat/sessions` | List chat sessions | Required |
+| POST | `/chat/sessions` | Create new session | Required |
+| GET | `/chat/sessions/{id}/messages` | Get session messages | Required |
+| POST | `/chat/sessions/{id}/messages` | Send message | Required |
+| GET | `/chat/sessions/{id}/messages/stream` | SSE stream response | Required |
+
+### AI Daily Planner (`/ai/daily-planner`)
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| POST | `/ai/daily-planner/generate` | Generate daily plan | Required |
+
+### AI Meal Update (`/ai/meal-update`)
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| POST | `/ai/meal-update` | Suggest meal modifications | Required |
+
+### Uploads (`/uploads`)
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| POST | `/uploads/image` | Upload food image | Required |
+| DELETE | `/uploads/{id}` | Delete uploaded image | Required |
+
+### Admin Agents (`/admin/agents`)
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| GET | `/admin/agents/runs?user_id=` | Agent run history | Admin |
+| GET | `/admin/agents/stats` | Aggregate agent stats | Admin |
+
+## Response Format
+
+### Success
 
 ```json
 {
-  "detail": "Mô tả lỗi cụ thể"
+  "id": "uuid",
+  "email": "user@example.com"
 }
 ```
 
-Với validation error (422):
+### Error
 
 ```json
 {
-  "detail": [
-    {
-      "type": "missing",
-      "loc": ["body", "meal_type"],
-      "msg": "Field required",
-      "input": {}
-    }
-  ]
+  "detail": "Human-readable error message",
+  "code": "ERROR_CODE"
 }
 ```
 
-## Best Practices
+## Rate Limits
 
-- Luôn đặt `response_model` để Pydantic tự động serialize
-- Đặt `status_code` rõ ràng (201 cho create, 204 cho delete không có body)
-- Validate business rules trong service layer, không trong route
-- Raise HTTPException với mã lỗi chính xác (400, 401, 403, 404, 422, 500, 503)
+| Endpoint | Limit |
+|----------|-------|
+| `/auth/login` | 10/min per IP |
+| `/auth/register` | 5/min per IP |
+| `/chat/*/messages/stream` | 30/min per user |
+| All other endpoints | 100/min per user |
+
+Rate limit headers are included in responses:
+```
+X-RateLimit-Limit: 30
+X-RateLimit-Remaining: 25
+X-RateLimit-Reset: 1640000000
+```
+
+## SSE Streaming Format
+
+The chat streaming endpoint (`GET /chat/sessions/{id}/messages/stream`) uses Server-Sent Events (SSE).
+
+### Event Types
+
+```
+event: card
+data: {"type":"single_select","title":"Bạn muốn giảm bao nhiêu kg?","options":[...]}
+
+data: Xin chào! Hãy cho tôi biết...
+
+data: Tiếp theo, tôi khuyên bạn...
+
+data: [DONE]
+
+data: [ERROR] Đã có lỗi xảy ra
+```
+
+**Card events** fire when the system needs clarification. Multiple agents may suggest cards; the orchestrator returns the highest-priority one. Card types: `single_select`, `multi_select`, `rank`, `number_input`, `confirm`.
+
+**Text deltas** are streamed as `data:` lines with incremental AI text.
+
+**Stream completion** is signaled by `data: [DONE]`.
+
+**Errors** are signaled by `data: [ERROR] <message>`.

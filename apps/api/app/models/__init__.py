@@ -10,7 +10,6 @@ from app.models.food_nutrition import FoodNutrition
 from app.models.meal import MealItem, MealLog
 from app.models.nutrition_goal import NutritionGoal
 from app.models.progress_log import ProgressLog
-from app.models.uploaded_image import UploadedImage
 from app.models.user import User
 from app.models.user_memory import UserMemory
 from app.models.user_profile import UserProfile
@@ -32,7 +31,6 @@ __all__ = [
     "MealLog",
     "NutritionGoal",
     "ProgressLog",
-    "UploadedImage",
     "User",
     "UserMemory",
     "UserProfile",

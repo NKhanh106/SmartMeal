@@ -9,9 +9,10 @@ interface ChatInputProps {
   onChange: (value: string) => void;
   onSend: () => void;
   disabled?: boolean;
+  placeholder?: string;
 }
 
-export function ChatInput({ value, onChange, onSend, disabled }: ChatInputProps) {
+export function ChatInput({ value, onChange, onSend, disabled, placeholder = "Nhập yêu cầu của bạn..." }: ChatInputProps) {
   const [localValue, setLocalValue] = useState(value);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -44,7 +45,7 @@ export function ChatInput({ value, onChange, onSend, disabled }: ChatInputProps)
           ref={textareaRef}
           rows={1}
           className="flex-1 border-none bg-transparent focus-visible:ring-0 focus-visible:outline-none shadow-none h-10 px-3 text-sm resize-none placeholder:text-slate-400"
-          placeholder="Nhập yêu cầu của bạn..."
+          placeholder={placeholder}
           value={localValue}
           onChange={(e) => {
             setLocalValue(e.target.value);

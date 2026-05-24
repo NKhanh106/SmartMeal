@@ -103,6 +103,7 @@ class FitnessCoachAgent(BaseAgent):
                 active_issues=active_issues,
                 last_workout=last_workout,
                 profile=profile,
+                active_goal=context.active_goal,
             )
 
             # 7. Call AI
@@ -117,16 +118,50 @@ class FitnessCoachAgent(BaseAgent):
             result_data = self._parse_json_safe(raw)
 
             # 9. Override if forced_type set (safety — never override rest for severe illness)
-            if forced_type == "rest":
-                if "workout_recommendation" not in result_data:
-                    result_data["workout_recommendation"] = {}
-                result_data["workout_recommendation"]["type"] = "rest"
-                if "schedule_adjustment" not in result_data:
-                    result_data["schedule_adjustment"] = {}
-                result_data["schedule_adjustment"]["skip_today"] = True
-                result_data["schedule_adjustment"]["reason"] = (
-                    f"Đang có triệu chứng {illness_severity} — cần nghỉ ngơi hoàn toàn"
-                )
+            if forced_type in ("rest", "light_activity"):
+                rec = result_data.get("workout_recommendation", {})
+
+                if forced_type == "rest":
+                    rec["type"] = "rest"
+                    # Clear ALL exercise data — contradicts rest type
+                    rec["exercises"] = []
+                    rec["avoid_exercises"] = []
+                    rec["duration_minutes"] = 0
+                    rec["intensity"] = "none"
+                    rec["recovery_focus"] = ["sleep", "hydration", "light_stretching"]
+                    rec["motivation"] = (
+                        "Hôm nay nghỉ ngơi hoàn toàn là điều cơ thể cần nhất. "
+                        "Phục hồi tốt = tập tốt hơn ngày mai"
+                    )
+                    if "schedule_adjustment" not in result_data:
+                        result_data["schedule_adjustment"] = {}
+                    result_data["schedule_adjustment"]["skip_today"] = True
+                    result_data["schedule_adjustment"]["reason"] = (
+                        f"Đang có triệu chứng {illness_severity} — "
+                        f"cần nghỉ ngơi hoàn toàn để phục hồi"
+                    )
+
+                elif forced_type == "light_activity":
+                    # Keep duration but limit intensity and replace heavy exercises
+                    rec["intensity"] = "low"
+                    rec["duration_minutes"] = min(rec.get("duration_minutes", 30), 20)
+                    rec["exercises"] = [
+                        ex for ex in rec.get("exercises", [])
+                        if ex.get("notes", "").lower() not in ("high", "heavy", "intense")
+                    ]
+                    if not rec["exercises"]:
+                        rec["exercises"] = [
+                            {
+                                "name": "Đi bộ nhẹ",
+                                "sets": None,
+                                "reps": None,
+                                "duration_seconds": 900,
+                                "notes": "Tốc độ thoải mái, thở đều",
+                                "avoid_if": []
+                            }
+                        ]
+
+                result_data["workout_recommendation"] = rec
 
             # 10. Build memory updates
             memory_updates = {}
@@ -219,6 +254,17 @@ Schema:
 
     def _build_prompt(self, **kwargs) -> str:
         parts = [f"User message: {kwargs['user_message']}\n"]
+        
+        profile = kwargs.get("profile")
+        if profile:
+            gender_val = profile.gender.value if hasattr(profile.gender, "value") else str(profile.gender)
+            parts.append(f"DEMOGRAPHICS: Age: {profile.date_of_birth} | Gender: {gender_val} | Height: {profile.height_cm}cm | Weight: {profile.current_weight_kg}kg")
+            
+        active_goal = kwargs.get("active_goal")
+        if active_goal:
+            goal_type = active_goal.goal_type.value if hasattr(active_goal.goal_type, "value") else str(active_goal.goal_type)
+            parts.append(f"GOAL: {goal_type} | Daily Target: {active_goal.daily_calorie_target} kcal")
+
         parts.append(f"Fitness level: {kwargs['fitness_level']}")
         parts.append(f"Preferred workout types: {', '.join(kwargs['preferred_types'])}")
 
@@ -242,4 +288,3 @@ Schema:
 
         return "\n".join(parts)
 
-    def _verify_recovery_day(self, data: dict) -> dict:

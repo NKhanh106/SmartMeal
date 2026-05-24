@@ -245,101 +245,107 @@ USERS = [
 ]
 
 
-# ─── Tính TDEE & macro target ─────────────────────────────────────────────────
+# ─── Tính TDEE & macro target ───────────────────────────────────
 
-def calc_bmr(weight_kg: float, height_cm: float, age: int, gender: GenderType) -> float:
+def calc_targets(udata: dict) -> dict:
+    """Tính BMR, TDEE, calorie target và macro targets."""
+    weight = udata["weight_kg"]
+    height = udata["height_cm"]
+    age = (date.today() - udata["dob"]).days // 365
+    gender = udata["gender"]
+    activity = udata["activity"]
+    goal_type = udata["goal_type"]
+
+    # Mifflin-St Jeor
     if gender == GenderType.nam:
-        return 88.362 + 13.397 * weight_kg + 4.799 * height_cm - 5.677 * age
-    return 447.593 + 9.247 * weight_kg + 3.098 * height_cm - 4.330 * age
+        bmr = 10 * weight + 6.25 * height - 5 * age + 5
+    else:
+        bmr = 10 * weight + 6.25 * height - 5 * age - 161
 
-def activity_multiplier(level: ActivityLevelType) -> float:
-    mapping = {
-        ActivityLevelType.it_van_dong: 1.2,
+    # Activity multiplier
+    activity_multipliers = {
+        ActivityLevelType.it_van_dong: 1.20,
         ActivityLevelType.van_dong_nhe: 1.375,
         ActivityLevelType.van_dong_vua: 1.55,
         ActivityLevelType.van_dong_nhieu: 1.725,
         ActivityLevelType.van_dong_rat_nhieu: 1.9,
     }
-    return mapping.get(level, 1.2)
+    tdee = bmr * activity_multipliers.get(activity, 1.55)
 
-def calc_targets(user: dict) -> dict:
-    weight = user["weight_kg"]
-    height = user["height_cm"]
-    today = date.today()
-    age = today.year - user["dob"].year - ((today.month, today.day) < (user["dob"].month, user["dob"].day))
-    bmr = calc_bmr(weight, height, age, user["gender"])
-    tdee = bmr * activity_multiplier(user["activity"])
-    goal = user["goal_type"]
+    # Goal adjustment
+    goal_adjustments = {
+        NutritionGoalType.giam_can: -500,
+        NutritionGoalType.tang_co: 300,
+        NutritionGoalType.giu_can: 0,
+    }
+    daily_cal = tdee + goal_adjustments.get(goal_type, 0)
 
-    if goal == NutritionGoalType.giam_can:
-        cal = tdee - 500
-    elif goal == NutritionGoalType.tang_co:
-        cal = tdee + 350
+    # Macro split
+    if udata["diet"] == DietTypeEnum.keto:
+        protein_pct, carb_pct, fat_pct = 0.25, 0.05, 0.70
+    elif udata["diet"] == DietTypeEnum.nhieu_dam:
+        protein_pct, carb_pct, fat_pct = 0.35, 0.40, 0.25
+    elif udata["diet"] == DietTypeEnum.it_tinh_bot:
+        protein_pct, carb_pct, fat_pct = 0.25, 0.25, 0.50
+    elif udata["diet"] == DietTypeEnum.an_chay:
+        protein_pct, carb_pct, fat_pct = 0.20, 0.55, 0.25
     else:
-        cal = tdee
-
-    protein_ratio = 0.30 if goal == NutritionGoalType.tang_co else 0.25
-    fat_ratio = 0.30 if user["diet"] == DietTypeEnum.keto else 0.25
-    protein_g = (cal * protein_ratio) / 4
-    fat_g = (cal * fat_ratio) / 9
-    carb_g = (cal - protein_g * 4 - fat_g * 9) / 4
+        protein_pct, carb_pct, fat_pct = 0.30, 0.40, 0.30
 
     return {
         "bmr_kcal": round(bmr, 1),
         "tdee_kcal": round(tdee, 1),
-        "daily_calorie_target": round(cal, 1),
-        "protein_target_g": round(protein_g, 1),
-        "carb_target_g": round(carb_g, 1),
-        "fat_target_g": round(fat_g, 1),
+        "daily_calorie_target": round(daily_cal),
+        "protein_target_g": round(daily_cal * protein_pct / 4),
+        "carb_target_g": round(daily_cal * carb_pct / 4),
+        "fat_target_g": round(daily_cal * fat_pct / 9),
     }
 
 
-# ─── Chọn thực phẩm theo diet type ────────────────────────────────────────────
-
-def pick_foods(diet: DietTypeEnum, meal_type: MealTypeEnum, calorie_budget: float) -> list[dict]:
-    pool = []
-    if diet == DietTypeEnum.an_chay or diet == DietTypeEnum.thuan_chay:
-        pool = CHAY_FOODS
-    elif meal_type == MealTypeEnum.bua_sang:
-        pool = BREAKFAST_FOODS
-    elif meal_type == MealTypeEnum.bua_trua:
-        pool = LUNCH_FOODS
-    elif meal_type == MealTypeEnum.bua_toi:
-        pool = DINNER_FOODS
+def pick_foods(diet: DietTypeEnum, meal_type: MealTypeEnum, cal_budget: float) -> list[dict]:
+    """Chọn ngẫu nhiên các món ăn phù hợp trong budget."""
+    if meal_type == MealTypeEnum.bua_sang:
+        pool = BREAKFAST_FOODS if diet != DietTypeEnum.an_chay else CHAY_FOODS
+    elif meal_type == MealTypeEnum.bua_trua or meal_type == MealTypeEnum.bua_toi:
+        pool = LUNCH_FOODS if diet != DietTypeEnum.an_chay else CHAY_FOODS
     else:
-        pool = SNACK_FOODS
+        pool = SNACK_FOODS if diet != DietTypeEnum.an_chay else CHAY_FOODS
 
     selected = []
-    total = 0.0
-    while pool:
-        food_key = random.choice(pool)
-        food = FOOD_DB[food_key]
-        # Giảm/bớt calo cho phù hợp bữa ăn
-        scale = random.uniform(0.6, 1.3)
-        cal = food["cal"] * scale
-        if total + cal > calorie_budget * 1.1:
-            break
+    total_cal = 0.0
+    remaining = cal_budget
+
+    candidates = list(FOOD_DB.keys())
+    random.shuffle(candidates)
+
+    for key in candidates:
+        if key not in FOOD_DB:
+            continue
+        food = FOOD_DB[key]
+        food_cal = food["cal"]
+        portion = min(1.0, remaining / food_cal) if food_cal > 0 else 0
+        if portion < 0.3:
+            continue
+
         selected.append({
-            "name": food_key,
-            "cal": round(cal, 1),
-            "protein": round(food["protein"] * scale, 1),
-            "carb": round(food["carb"] * scale, 1),
-            "fat": round(food["fat"] * scale, 1),
-            "weight": round(food["weight"] * scale, 1),
+            "name": key,
+            "cal": round(food_cal * portion),
+            "protein": round(food["protein"] * portion, 1),
+            "carb": round(food["carb"] * portion, 1),
+            "fat": round(food["fat"] * portion, 1),
+            "weight": round(food["weight"] * portion),
         })
-        total += cal
+        total_cal += food_cal * portion
+        remaining -= food_cal * portion
+
+        if total_cal >= cal_budget * 0.9:
+            break
+
     return selected
 
 
-# ─── Seed logic ───────────────────────────────────────────────────────────────
-
-async def _create_tables():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
 async def seed_demo_data():
-    """Tạo 10 user, mỗi user 10 ngày dữ liệu (3 bữa chính + bữa phụ)."""
-    await _create_tables()
+    """Main seed function."""
 
     async with AsyncSessionLocal() as db:
         # Xóa dữ liệu cũ
@@ -381,9 +387,9 @@ async def seed_demo_data():
                 current_weight_kg=udata["weight_kg"],
                 activity_level=udata["activity"],
                 diet_type=udata["diet"],
-                allergies=udata["allergies"],
-                disliked_foods=udata["disliked_foods"],
-                preferred_foods=udata["preferred_foods"],
+                allergies_text=udata["allergies"],
+                disliked_foods_text=udata["disliked_foods"],
+                preferred_foods_text=udata["preferred_foods"],
             )
             db.add(profile)
 
@@ -522,7 +528,7 @@ async def seed_demo_data():
             all_users.append((user.email, "SmartMeal123"))
 
         await db.commit()
-        print("\n✅ Hoàn tất! Đã tạo 10 users.")
+        print("\nHoàn tất! Đã tạo 10 users.")
         print("\nTài khoản đăng nhập:")
         for email, pw in all_users:
             print(f"  {email} / {pw}")

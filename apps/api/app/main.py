@@ -14,14 +14,12 @@ from app.api.v1 import (
     admin_agents,
     ai_chatbot,
     ai_daily_planner,
-    ai_meal_update,
     auth,
     dashboard,
     food_nutrition,
     meal_logs,
     nutrition_goals,
     progress_logs,
-    uploads,
     user_profiles,
     workout_plans,
 )
@@ -29,7 +27,6 @@ from app.api.v1 import health as ai_health
 from app.core.config import settings
 from app.core.rate_limiter import limiter
 from app.core.cache import get_redis, cache_close
-from app.services.image_cleanup_scheduler import start_scheduler, stop_scheduler
 
 # Setup structured logging when not in debug mode
 ENV = os.getenv("ENVIRONMENT", "development")
@@ -44,8 +41,6 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    start_scheduler()
     # Warm up Redis connection
     try:
         redis = await get_redis()
@@ -55,7 +50,6 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Redis unavailable — running without cache: {e}")
     yield
     # Shutdown
-    stop_scheduler()
     await cache_close()
 
 
@@ -117,17 +111,10 @@ app.include_router(progress_logs.router, prefix=settings.API_V1_STR)
 app.include_router(workout_plans.router, prefix=settings.API_V1_STR)
 app.include_router(ai_daily_planner.router, prefix=settings.API_V1_STR)
 app.include_router(ai_chatbot.router, prefix=settings.API_V1_STR)
-app.include_router(ai_meal_update.router, prefix=settings.API_V1_STR)
-app.include_router(uploads.router, prefix=settings.API_V1_STR)
 app.include_router(admin_agents.router, prefix=settings.API_V1_STR)
 # Health check endpoint (no auth required, registered at root level)
 app.include_router(ai_health.router)
 
-# ── Static files for uploaded images ─────────────────────────────────────────
-_upload_dir = Path(settings.UPLOAD_DIR).resolve()
-if not _upload_dir.exists():
-    _upload_dir.mkdir(parents=True, exist_ok=True)
-app.mount(settings.IMAGE_PUBLIC_BASE_URL, StaticFiles(directory=str(_upload_dir)), name="uploads")
 
 
 @app.get("/", tags=["General"])

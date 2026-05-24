@@ -26,8 +26,6 @@ class MealLogCreate(BaseModel):
     meal_type: MealTypeEnum = MealTypeEnum.khac
     meal_time: Optional[datetime] = None
 
-    image_url: Optional[str] = None
-    image_storage_path: Optional[str] = None
 
     source: MealLogSourceType = MealLogSourceType.manual
 
@@ -70,8 +68,6 @@ class MealLogResponse(BaseModel):
     meal_type: MealTypeEnum
     meal_time: datetime
 
-    image_url: Optional[str] = None
-    image_storage_path: Optional[str] = None
 
     source: MealLogSourceType
 

@@ -7,13 +7,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 def _find_env_file() -> str:
     config_path = Path(__file__).resolve()
-    api_env = config_path.parents[2] / ".env"
-    root_env = config_path.parents[4] / ".env"
+    # Container: /app/app/core/config.py → /app/.env.production
+    app_root = config_path.parents[2]
+    container_env = app_root / ".env.production"
+    container_fallback = app_root / ".env"
 
-    if api_env.exists():
-        return str(api_env)
-    if root_env.exists():
-        return str(root_env)
+    if container_env.exists():
+        return str(container_env)
+    if container_fallback.exists():
+        return str(container_fallback)
     return ".env"
 
 
@@ -62,13 +64,6 @@ class Settings(BaseSettings):
 
     USDA_API_KEY: str = ""
 
-    # ── Image Upload Settings ─────────────────────────────────────────────────
-    UPLOAD_DIR: str = "uploads"
-    MAX_IMAGE_SIZE_BYTES: int = 5 * 1024 * 1024  # 5 MB
-    IMAGE_PUBLIC_BASE_URL: str = "/uploads"
-
-    # ── Feature Flags ─────────────────────────────────────────────────────────
-    FEATURE_IMAGE_MEAL_UPLOAD_ENABLED: bool = False  # Deprecated: image upload for meal logging
 
     # ── Redis Cache Settings ──────────────────────────────────────────────────────
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -77,10 +72,6 @@ class Settings(BaseSettings):
     FOOD_RECOGNITION_CACHE_TTL: int = 86400   # Cache food recognition 24 hours
     DAILY_PLAN_CACHE_TTL: int = 43200         # Cache daily plan 12 hours
 
-    # Retention (days), NULL = never auto-delete
-    IMAGE_RETENTION_DAYS_MEAL: int | None = 7
-    IMAGE_RETENTION_DAYS_TEMPORARY: int | None = 1
-    IMAGE_RETENTION_DAYS_PROGRESS: int | None = None  # never auto-delete
 
     @model_validator(mode="after")
     def validate_non_dev_secrets(self) -> "Settings":

@@ -38,10 +38,8 @@ class MealLog(Base):
         server_default=text("now()")
     )
 
-    image_url: Mapped[Optional[str]] = mapped_column(Text)
-    image_storage_path: Mapped[Optional[str]] = mapped_column(Text)
-
     source: Mapped[MealLogSourceType] = mapped_column(
+        Enum(MealLogSourceType, name="meal_log_source", create_type=False),
         nullable=False,
         default=MealLogSourceType.manual,
         server_default="manual",

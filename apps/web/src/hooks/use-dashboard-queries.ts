@@ -43,7 +43,7 @@ export function useDailyDashboard(targetDate?: string) {
 export function useWeeklyDashboard(endDate?: string) {
   return useQuery<WeeklyDashboardResponse>({
     queryKey: DASHBOARD_QUERY_KEYS.weekly(endDate ?? "today"),
-    queryFn: () => analyticsService.getWeeklyDashboard(endDate),
+    queryFn: () => analyticsService.getWeeklyDashboard({ end_date: endDate }),
     staleTime: 1000 * 60 * 10, // 10 minutes
   });
 }
