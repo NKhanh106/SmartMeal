@@ -2,16 +2,16 @@
 FROM node:20-alpine AS deps
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
-COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile --prod
+COPY package.json ./
+RUN pnpm install --prod
 
 # ── Builder stage ─────────────────────────────────────────────────────────────
 FROM node:20-alpine AS builder
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
 
-COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+COPY package.json ./
+RUN pnpm install
 
 COPY . .
 
@@ -21,7 +21,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 # Accept API URL at build time (default to internal Docker service name)
 ARG NEXT_PUBLIC_API_BASE_URL=http://api:8000
-ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
+ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
 
 RUN pnpm run build
 
@@ -47,7 +47,7 @@ RUN chown -R nextjs:nodejs /app
 USER nextjs
 
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD wget -qO- http://localhost:3000 || exit 1
+    CMD node -e "require('http').get('http://localhost:3000', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
 
 EXPOSE 3000
 

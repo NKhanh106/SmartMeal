@@ -1,3 +1,13 @@
+# IMPORTANT: This project uses Supabase for PostgreSQL (external managed DB).
+# PostgreSQL is NOT included as a Docker service.
+#
+# Before running, create apps/api/.env.production with:
+#   DATABASE_URL=postgresql+asyncpg://postgres:PASSWORD@db.XXX.supabase.co:6543/postgres
+#   MIGRATION_DATABASE_URL=postgresql://postgres:PASSWORD@db.XXX.supabase.co:5432/postgres
+#
+# Run migrations manually before first deploy:
+#   docker-compose run --rm api alembic upgrade head
+#
 services:
   redis:
     image: redis:7-alpine
@@ -66,13 +76,15 @@ services:
       context: ./apps/web
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
     restart: unless-stopped
     depends_on:
       api:
         condition: service_healthy
+    environment:
+      - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000"]
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3000', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
       interval: 30s
       timeout: 10s
       retries: 3

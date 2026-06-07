@@ -3,23 +3,20 @@
  * Maps to FastAPI endpoints under /api/v1/auth/
  */
 
-import { apiClient, TOKEN_KEY } from "@/lib/api-client";
-import type { UserCreate, Token, UserResponse } from "@/lib/types/api";
-
-// ─── Auth Service ────────────────────────────────────────────────────────────
-
-export const REFRESH_TOKEN_KEY = "smartmeal_refresh_token";
+import { apiClient } from "@/lib/api-client";
+import type { UserCreate, UserResponse } from "@/lib/types/api";
 
 export const authService = {
   /**
    * POST /api/v1/auth/login
    * Backend expects OAuth2 form-data: username (email) + password
+   * Returns access token; refresh token is set as httpOnly cookie by the backend.
    */
-  async login(email: string, password: string): Promise<Token & { refresh_token?: string }> {
+  async login(email: string, password: string): Promise<{ access_token: string; expires_in: number }> {
     const params = new URLSearchParams();
     params.set("username", email);
     params.set("password", password);
-    const response = await apiClient.post<Token & { refresh_token?: string }>(
+    const response = await apiClient.post<{ access_token: string; expires_in: number }>(
       "/api/v1/auth/login",
       params.toString(),
       {
@@ -54,43 +51,9 @@ export const authService = {
   },
 
   /**
-   * Store both tokens in localStorage
+   * POST /api/v1/auth/logout — clear refresh token cookie and revoke it server-side
    */
-  setTokens(accessToken: string, refreshToken?: string): void {
-    if (typeof window !== "undefined") {
-      localStorage.setItem(TOKEN_KEY, accessToken);
-      if (refreshToken) {
-        localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
-      }
-    }
-  },
-
-  /**
-   * Store token in localStorage
-   */
-  setToken(token: string): void {
-    if (typeof window !== "undefined") {
-      localStorage.setItem(TOKEN_KEY, token);
-    }
-  },
-
-  /**
-   * Get refresh token
-   */
-  getRefreshToken(): string | null {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem(REFRESH_TOKEN_KEY);
-    }
-    return null;
-  },
-
-  /**
-   * Clear all tokens from localStorage
-   */
-  logout(): void {
-    if (typeof window !== "undefined") {
-      localStorage.removeItem(TOKEN_KEY);
-      localStorage.removeItem(REFRESH_TOKEN_KEY);
-    }
+  async logout(): Promise<void> {
+    await apiClient.post("/api/v1/auth/logout");
   },
 };

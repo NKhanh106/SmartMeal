@@ -9,6 +9,7 @@ patterns before it enters the prompt.
 from __future__ import annotations
 
 import re
+import unicodedata
 
 INJECTION_PATTERNS: list[re.Pattern[str]] = [
     # Prompt override attempts
@@ -29,19 +30,34 @@ INJECTION_PATTERNS: list[re.Pattern[str]] = [
 ]
 
 
-def sanitize_for_prompt(text: str, max_length: int = 500) -> str:
+def sanitize_for_prompt(
+    text: str,
+    max_length: int = 500,
+    truncate_from: str = "end",
+) -> str:
     """
     Sanitize user input before injecting into AI prompts.
 
     Removes:
-    - Known prompt injection patterns
+    - Known prompt injection patterns (after NFKC normalization)
     - Control characters and null bytes
     - Excessively long inputs (truncated to max_length)
+
+    Processing order (FIX-7):
+      1. Unicode NFKC normalization — defeats homoglyph / mixed-script tricks
+      2. Strip null / control chars
+      3. Apply ALL INJECTION_PATTERNS regex filters
+      4. Truncate to max_length (post-filter, so boundary-spanning patterns
+         cannot slip through)
 
     Args:
         text: Raw user input string
         max_length: Maximum characters to keep (default 500).
                     Prevents token budget exhaustion attacks.
+        truncate_from: Where to cut when truncating.
+                        "end"    → keep prefix (default, safest for injection defense)
+                        "start"  → keep suffix
+                        "middle" → keep head+tail, drop middle
 
     Returns:
         Sanitized string safe for prompt injection.
@@ -49,17 +65,31 @@ def sanitize_for_prompt(text: str, max_length: int = 500) -> str:
     if not text:
         return ""
 
-    # Truncate first to limit processing
-    text = text[:max_length]
+    # FIX-7 Step 1 (V-9): Normalize Unicode — collapses homoglyphs
+    # e.g. Cyrillic 'і' → Latin 'i', full-width → half-width, etc.
+    text = unicodedata.normalize("NFKC", text)
 
-    # Remove null bytes and other control characters
+    # FIX-7 Step 2: Strip null bytes and other control characters
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
 
-    # Apply injection pattern filters
+    # FIX-7 Step 3 (V-1, V-3): Apply ALL injection filters BEFORE truncation.
+    # This prevents boundary-spanning payloads from slipping through the cut.
     for pattern in INJECTION_PATTERNS:
         text = pattern.sub("[filtered]", text)
 
-    return text.strip()
+    # FIX-7 Step 4: Truncate only after the text is clean
+    if len(text) <= max_length:
+        return text.strip()
+
+    if truncate_from == "end":
+        text = text[:max_length]
+    elif truncate_from == "middle":
+        half = max_length // 2
+        text = f"{text[:half]}\n...[truncated]...\n{text[-half:]}"
+    else:  # "start"
+        text = text[-max_length:]
+
+    return text
 
 
 def sanitize_food_name(name: str) -> str:

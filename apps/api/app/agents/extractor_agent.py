@@ -3,11 +3,18 @@ Agent 1 — Information Extractor.
 
 Runs silently after EVERY user message.
 Extracts structured facts from the conversation turn and updates UserMemory.
+Also writes ConversationInsight records (single pipeline — no duplicate _bg_extract_insights).
 Never talks to the user directly.
 
 Trigger:
 - After every user message (async, non-blocking)
 - Also runs on session end to update conversation_summary
+
+PHASE 1 FIX (C2):
+- ExtractorAgent is the SINGLE source of truth for both:
+    1. UserMemory.key_facts (JSONB) — via _update_memory()
+    2. ConversationInsight table (SQL) — via upsert_conversation_insights()
+- _bg_extract_insights has been removed from service.py
 """
 
 import json
@@ -20,8 +27,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 
 from app.agents.base import AgentContext, AgentResult, BaseAgent
+from app.agents.context_loader import FullUserContext
+from app.db.session import AsyncSessionLocal
 from app.models.chat import ChatSession
 from app.models.user_memory import UserMemory
+from app.agents.memory_service import memory_write_engine
+from app.agents.proposal_builder import build_proposals_from_extraction
+from app.schemas.chat import ExtractedInsightItem
+from app.services.conversation_insights_service import upsert_conversation_insights
 
 logger = logging.getLogger(__name__)
 
@@ -58,14 +71,25 @@ EXTRACTION_SCHEMA = """
     {
       "date": "YYYY-MM-DD or empty",
       "meal_type": "breakfast|lunch|dinner|snack|empty",
-      "items": ["food item 1", "food item 2"],
-      "estimated_kcal": 0,
+      "items": [
+        {
+          "food_name": "food name",
+          "quantity": 1,
+          "unit": "phần|tô|đĩa|con|gói|cup|ly",
+          "calories": 0,
+          "protein_g": 0,
+          "carb_g": 0,
+          "fat_g": 0
+        }
+      ],
+      "total_calories": 0,
       "confidence": "high|medium|low"
     }
   ],
   "body_state": {
+    "weight_kg": 0,
     "energy_level": "low|normal|high|null",
-    "sleep_hours": 0,
+    "sleep_last_night": 0,
     "digestion_status": "normal|bloated|diarrhea|constipated|null",
     "hydration": "low|normal|high|null",
     "sore_areas": ["body_part_1", "body_part_2"],
@@ -77,7 +101,8 @@ EXTRACTION_SCHEMA = """
       "type": "symptom|illness|recovery|measurement|note",
       "category": "digestive|muscular|metabolic|respiratory|mental|other",
       "description": "exact or near-exact phrase from user",
-      "severity": "mild|moderate|severe"
+      "severity": "mild|moderate|severe",
+      "confidence": "high|medium|low"
     }
   ],
   "facts": [
@@ -88,10 +113,11 @@ EXTRACTION_SCHEMA = """
     }
   ],
   "fitness": {
+    "workout_completed": true,
     "workout_type": "gym|running|swimming|cycling|yoga|other|null",
-    "duration_min": 0,
+    "duration_minutes": 0,
     "muscle_groups_worked": ["chest", "back", "legs"],
-    "new_soreness": ["body_part"],
+    "new_sore_areas": ["body_part"],
     "injuries": ["body_part"],
     "fitness_level": "beginner|intermediate|advanced|null"
   }
@@ -102,7 +128,7 @@ EXTRACTION_SCHEMA = """
 class ExtractorAgent(BaseAgent):
     name = "extractor"
 
-    async def run(
+    async def execute(
         self,
         context: AgentContext,
         db: AsyncSession,
@@ -175,17 +201,68 @@ Rules:
             # 4. Build memory_updates
             memory_updates = self._build_memory_updates(extracted, today, context)
 
-            # 5. Update conversation_summary if session has 5+ messages
+            # 5. Build proposals for user confirmation (before any DB write)
+            proposals = []
+            if extracted and context.full_context:
+                try:
+                    proposals = build_proposals_from_extraction(
+                        extraction=extracted,
+                        user_message=user_message,
+                        session_id=context.session_id,
+                        current_context=context.full_context,
+                    )
+                except Exception as e:
+                    logger.warning("ProposalBuilder failed: %s", e)
+
+            # 6. Update conversation_summary if session has 5+ messages
             msg_count = len(context.conversation_history) + 1
             if msg_count >= 5:
                 summary_text = await self._summarize_session(context, db)
                 if summary_text:
                     memory_updates["conversation_summary"] = summary_text
 
-            # 6. Apply updates to DB and mark session — ONLY after successful write
+            # 7. Apply memory updates via centralized MemoryWriteEngine
+            # OPTIMIZE-1 B2: Route through MemoryWriteEngine instead of direct _update_memory().
+            # This is the single write authority — _update_memory() bypasses it.
+            # Use commit_with_session(db) for atomicity with _mark_session_extracted.
             try:
-                await self._update_memory(str(context.user.id), memory_updates, db)
+                engine = memory_write_engine(context.user.id, AsyncSessionLocal)
+                if memory_updates:
+                    authorized = engine.apply("extractor", memory_updates)
+                    if not authorized:
+                        logger.warning(
+                            "[Extractor] MemoryWriteEngine blocked some writes for user %s",
+                            context.user.id
+                        )
+                    elif engine.has_pending():
+                        await engine.commit_with_session(db)
                 await self._mark_session_extracted(context.session_id, db)
+
+                # PHASE 1 FIX (C2): Write ConversationInsight records from the SAME extracted data.
+                # This replaces the removed _bg_extract_insights background task.
+                # ConversationInsight is the SQL table for structured facts that the chatbot context
+                # builder loads for personalization. key_facts in UserMemory is the JSONB mirror.
+                if extracted.get("facts"):
+                    try:
+                        insights = self._build_conversation_insights(extracted, today)
+                        if insights:
+                            await upsert_conversation_insights(
+                                db=db,
+                                user_id=context.user.id,
+                                session_id=context.session_id,
+                                insights=insights,
+                            )
+                            logger.info(
+                                "[Extractor] Wrote %d ConversationInsight records for user %s session %s",
+                                len(insights), context.user.id, context.session_id
+                            )
+                    except Exception as insight_err:
+                        # OPTIMIZE-1 B4: Nâng cấp lên error — failure của insight write
+                        # là dấu hiệu data loss tiềm ẩn, không phải warning nhẹ.
+                        logger.error(
+                            "[Extractor] ConversationInsight write failed for user %s session %s: %s",
+                            context.user.id, context.session_id, insight_err
+                        )
             except Exception as e:
                 logger.error(f"[Extractor] Memory update failed — session will retry: {e}")
                 # Do NOT mark as extracted — allow retry on next message
@@ -198,6 +275,7 @@ Rules:
                 content=extracted,
                 confidence=0.8,
                 memory_updates=memory_updates,
+                proposals=proposals,
             ), db)
 
             return AgentResult(
@@ -207,6 +285,7 @@ Rules:
                 content=extracted,
                 confidence=0.8,
                 memory_updates=memory_updates,
+                proposals=proposals,
             )
 
         except Exception as exc:
@@ -270,17 +349,33 @@ Rules:
             for meal in meals:
                 if not isinstance(meal, dict):
                     continue
-                items = meal.get("items") or []
-                if not items:
+                raw_items = meal.get("items") or []
+                if not raw_items:
                     continue
-                valid_meals.append({
-                    "date": meal.get("date") or today,
-                    "meal_type": meal.get("meal_type") or "snack",
-                    "items": items,
-                    "estimated_kcal": meal.get("estimated_kcal") or 0,
-                    "confidence": meal.get("confidence", "medium"),
-                    "source_session_id": context.session_id,
-                })
+                # Normalize: items can be strings or dicts
+                items_out = []
+                for raw_item in raw_items:
+                    if isinstance(raw_item, str):
+                        items_out.append({"food_name": raw_item, "calories": 0, "protein_g": 0, "carb_g": 0, "fat_g": 0})
+                    elif isinstance(raw_item, dict):
+                        items_out.append({
+                            "food_name": raw_item.get("food_name", "Unknown"),
+                            "quantity": raw_item.get("quantity", 1),
+                            "unit": raw_item.get("unit", "phần"),
+                            "calories": raw_item.get("calories", 0),
+                            "protein_g": raw_item.get("protein_g", 0),
+                            "carb_g": raw_item.get("carb_g", 0),
+                            "fat_g": raw_item.get("fat_g", 0),
+                        })
+                if items_out:
+                    valid_meals.append({
+                        "date": meal.get("date") or today,
+                        "meal_type": meal.get("meal_type") or "snack",
+                        "items": items_out,
+                        "estimated_kcal": meal.get("total_calories") or 0,
+                        "confidence": meal.get("confidence", "medium"),
+                        "source_session_id": context.session_id,
+                    })
             if valid_meals:
                 updates["recent_meals"] = valid_meals
 
@@ -288,8 +383,8 @@ Rules:
         body_state = extracted.get("body_state") or {}
         if body_state:
             existing_snapshot = {}
-            if context.memory and context.memory.body_snapshot:
-                existing_snapshot = dict(context.memory.body_snapshot)
+            if context.memory:
+                existing_snapshot = dict(context.memory.body_snapshot or {})
 
             # Sore areas: ADD new areas, don't replace (unless user says no longer sore)
             new_sore_areas = body_state.get("sore_areas") or []
@@ -299,12 +394,12 @@ Rules:
                 body_state["sore_areas"] = merged_sore
 
             # Only update weight if explicitly stated (will be handled separately)
-            if "weight" in body_state:
-                weight_val = body_state.get("weight")
+            if "weight_kg" in body_state:
+                weight_val = body_state.get("weight_kg")
                 if isinstance(weight_val, (int, float)):
                     body_state["weight_updated_at"] = today
                 else:
-                    del body_state["weight"]
+                    del body_state["weight_kg"]
 
             existing_snapshot.update(body_state)
             existing_snapshot["last_updated"] = datetime.now(timezone.utc).isoformat()
@@ -361,11 +456,11 @@ Rules:
             # Merge new workout info
             if fitness.get("workout_type"):
                 existing_fitness["last_workout_date"] = today
-            if fitness.get("new_soreness"):
+            if fitness.get("new_sore_areas"):
                 existing_sore = existing_fitness.get("current_restrictions", [])
                 if not isinstance(existing_sore, list):
                     existing_sore = []
-                for area in fitness["new_soreness"]:
+                for area in fitness["new_sore_areas"]:
                     if not any(r.get("area") == area for r in existing_sore):
                         existing_sore.append({
                             "area": area,
@@ -380,6 +475,62 @@ Rules:
             updates["fitness_memory"] = existing_fitness
 
         return updates
+
+    def _build_conversation_insights(
+        self,
+        extracted: dict[str, Any],
+        today: str,
+    ) -> list[ExtractedInsightItem]:
+        """
+        PHASE 1 FIX (C2): Convert extracted 'facts' into ConversationInsight schema.
+
+        Maps EXTRACTION_SCHEMA categories to ConversationInsight.insight_type values:
+          allergy, food_reaction  → "health_constraint"
+          preference             → "diet_preference"
+          habit, schedule        → "general"
+          (fitness-related facts → "fitness_note" if present)
+
+        Each item gets a deterministic key for upsert deduplication.
+        """
+        insights: list[ExtractedInsightItem] = []
+        facts = extracted.get("facts") or []
+        if not facts:
+            return insights
+
+        type_map = {
+            "allergy":        "health_constraint",
+            "food_reaction":   "health_constraint",
+            "preference":      "diet_preference",
+            "habit":          "general",
+            "schedule":        "general",
+            "other":          "general",
+        }
+
+        for fact in facts:
+            if not isinstance(fact, dict):
+                continue
+            raw_category = fact.get("category", "other")
+            category = str(raw_category).lower().strip()
+            insight_type = type_map.get(category, "general")
+
+            # Build deduplication key: lowercase, spaces collapsed
+            fact_text = fact.get("fact", "")
+            if not fact_text:
+                continue
+            key_base = f"{insight_type}_{fact_text.lower().replace(' ', '_')[:60]}"
+            key = key_base[:100]
+
+            # Vietnamese summary from the fact text
+            summary = fact_text[:300]
+
+            insights.append(ExtractedInsightItem(
+                insight_type=insight_type,
+                key=key,
+                value=fact_text[:500],
+                summary=summary,
+            ))
+
+        return insights
 
     def _merge_sore_areas(
         self,

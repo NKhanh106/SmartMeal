@@ -14,6 +14,18 @@ function formatTime(date: Date): string {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+const DEPTH_BADGE_CLASSES: Record<string, string> = {
+  quick: "border-amber-200 text-amber-600 bg-amber-50",
+  deep: "border-emerald-200 text-emerald-600 bg-emerald-50",
+  expert: "border-violet-200 text-violet-600 bg-violet-50",
+};
+
+const DEPTH_BADGE_ICONS: Record<string, string> = {
+  quick: "⚡",
+  deep: "🔍",
+  expert: "🧠",
+};
+
 export function ChatMessage({ message, onRetry }: ChatMessageProps) {
   const isUser = message.role === "user";
   const isError = message.isError === true;
@@ -76,13 +88,27 @@ export function ChatMessage({ message, onRetry }: ChatMessageProps) {
             )}
           </>
         )}
+
+        {/* Footer: depth badge + timestamp */}
         <div
           className={cn(
             "text-[10px] mt-1.5 opacity-50 font-bold uppercase",
             isUser ? "text-right" : "text-left"
           )}
         >
-          {formatTime(message.timestamp)}
+          <span className="inline-flex items-center gap-1">
+            {formatTime(message.timestamp)}
+            {!isUser && message.depth && (
+              <span
+                className={cn(
+                  "inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-full border ml-2 opacity-60",
+                  DEPTH_BADGE_CLASSES[message.depth] ?? ""
+                )}
+              >
+                {DEPTH_BADGE_ICONS[message.depth]}
+              </span>
+            )}
+          </span>
         </div>
         {isError && onRetry && (
           <button

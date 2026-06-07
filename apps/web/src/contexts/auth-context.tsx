@@ -12,7 +12,7 @@ import { useRouter, usePathname } from "next/navigation";
 
 import { authService } from "@/services/auth.service";
 import type { UserResponse } from "@/lib/types/api";
-import { TOKEN_KEY, ApiError } from "@/lib/api-client";
+import { ApiError, setAccessToken, clearAccessToken } from "@/lib/api-client";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -64,17 +64,21 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   }, []);
 
-  // On mount: check if token exists and fetch user
+  // On mount: check if access token cookie exists and sync to memory
   useEffect(() => {
-    const token = localStorage.getItem(TOKEN_KEY);
-    if (!token) {
+    // Read from cookie (set by the API response interceptor after refresh)
+    const cookieToken = document.cookie
+      .split("; ")
+      .find((row) => row.startsWith("access_token="))
+      ?.split("=")[1];
+    if (!cookieToken) {
       setIsLoading(false);
       return;
     }
+    setAccessToken(decodeURIComponent(cookieToken));
     refreshUser()
       .catch(() => {
-        // Token exists but /me fails → clear invalid token
-        authService.logout();
+        clearAccessToken();
         setUser(null);
       })
       .finally(() => setIsLoading(false));
@@ -106,10 +110,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const login = useCallback(
     async (email: string, password: string) => {
       const result = await authService.login(email, password);
-      authService.setTokens(result.access_token, result.refresh_token);
-      // Set cookie for middleware auth check
-      if (typeof window !== "undefined") {
-        document.cookie = `access_token=${result.access_token}; path=/; max-age=${(result as { expires_in?: number }).expires_in ?? 86400}; SameSite=Lax`;
+      // Access token: memory (api-client) + cookie (middleware)
+      setAccessToken(result.access_token);
+      if (typeof document !== "undefined") {
+        document.cookie = `access_token=${result.access_token}; path=/; max-age=${result.expires_in}; SameSite=Lax`;
       }
       await refreshUser();
       router.replace("/dashboard");
@@ -129,10 +133,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   // Logout
   const logout = useCallback(() => {
-    authService.logout();
-    if (typeof window !== "undefined") {
+    clearAccessToken();
+    if (typeof document !== "undefined") {
       document.cookie = "access_token=; path=/; max-age=0";
+      document.cookie = "smartmeal_refresh_token=; path=/api/auth/refresh; max-age=0";
     }
+    authService.logout().catch(() => {
+      // Logout endpoint failure is non-fatal — clear local state anyway
+    });
     setUser(null);
     router.replace("/login");
   }, [router]);

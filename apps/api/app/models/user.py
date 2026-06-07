@@ -27,9 +27,10 @@ class User(Base):
 
     # Các trường phục vụ security và chặn login/spam (Từ Schema Database)
     failed_login_attempts: Mapped[int] = mapped_column(SmallInteger, default=0)
-    login_allowed_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), 
-        server_default=text("now()")
+    login_allowed_at: Mapped[Optional[datetime]] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+        default=None,
     )
 
     # Audit trails & Soft Delete
@@ -47,8 +48,11 @@ class User(Base):
 
     # Relationship (1-1 với user_profiles)
     profile = relationship("UserProfile", back_populates="user", uselist=False, cascade="all, delete")
-    progress_logs = relationship("ProgressLog", back_populates="user", cascade="all, delete")
+    memory = relationship("UserMemory", back_populates="user", uselist=False, cascade="all, delete")
+    nutrition_goals = relationship("NutritionGoal", back_populates="user", cascade="all, delete")
     workout_plans = relationship("WorkoutPlan", back_populates="user", cascade="all, delete")
+    progress_logs = relationship("ProgressLog", back_populates="user", cascade="all, delete")
+    meal_logs = relationship("MealLog", back_populates="user", cascade="all, delete")
 
     __table_args__ = (
         CheckConstraint("role IN ('user', 'admin')", name="chk_users_role"),

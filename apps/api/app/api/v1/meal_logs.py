@@ -14,6 +14,7 @@ from app.models.meal import MealLog
 from app.models.user import User
 from app.schemas.meal import MealLogCreate, MealLogResponse, MealLogSummaryResponse
 from app.services.meal_service import create_meal_log_with_items, recalculate_meal_totals
+from app.services.daily_recommendation_service import invalidate_user_plan_cache
 
 router = APIRouter(prefix="/meal-logs", tags=["Meal Logs"])
 
@@ -38,6 +39,8 @@ async def create_meal_log(
             status_code=status.HTTP_409_CONFLICT,
             detail="Meal log could not be created because related data is invalid.",
         )
+
+    await invalidate_user_plan_cache(current_user.id)
 
     result = await db.execute(
         select(MealLog)
@@ -90,6 +93,7 @@ async def delete_meal_log(
     ensure_user_access(current_user, meal_log.user_id)
     await db.delete(meal_log)
     await db.commit()
+    await invalidate_user_plan_cache(meal_log.user_id)
     return None
 
 

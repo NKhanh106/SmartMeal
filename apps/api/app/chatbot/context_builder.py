@@ -9,6 +9,7 @@ from sqlalchemy.future import select
 
 from app.chatbot.context_policy import DEFAULT_CHATBOT_CONTEXT_POLICY
 from app.core.constants import CONDITION_RULES
+from app.core.sanitize import sanitize_for_prompt
 from app.models.chat import ChatMessage
 from app.models.daily_recommendation import DailyRecommendation
 from app.models.meal import MealLog
@@ -253,7 +254,10 @@ async def build_chatbot_context(
         "recent_chat_history": [
             {
                 "role": msg.role,
-                "content": msg.content,
+                # FIX-7 (V-5, V-2): sanitize every historical message content
+                # before it enters the prompt. Cumulative multi-turn injection
+                # and stored-persistent injection via chat history are both blocked.
+                "content": sanitize_for_prompt(msg.content, max_length=500),
                 "created_at": msg.created_at,
             }
             for msg in recent_chat_messages
@@ -261,6 +265,14 @@ async def build_chatbot_context(
     }
 
     if profile:
+        # FIX-7 (V-2): Sanitize ALL free-text fields before they reach the AI prompt.
+        # Stored-persistent injection via profile fields is blocked here.
+        # Guard: skip sanitization for non-string values (Enum, int, float, None).
+        def _safe(text, limit=500):
+            if isinstance(text, str):
+                return sanitize_for_prompt(text, max_length=limit)
+            return text
+
         profile_dict = {
             "gender": profile.gender.value if hasattr(profile.gender, "value") else str(profile.gender),
             "date_of_birth": profile.date_of_birth,
@@ -269,29 +281,53 @@ async def build_chatbot_context(
             "current_body_fat_percent": profile.current_body_fat_percent,
             "activity_level": profile.activity_level.value if hasattr(profile.activity_level, "value") else str(profile.activity_level),
             "diet_type": profile.diet_type.value if hasattr(profile.diet_type, "value") else str(profile.diet_type),
-            "allergies": profile.allergies,
-            "allergies_text": profile.allergies_text,
-            "disliked_foods": profile.disliked_foods,
-            "disliked_foods_text": profile.disliked_foods_text,
-            "preferred_foods": profile.preferred_foods,
-            "preferred_foods_text": profile.preferred_foods_text,
-            "health_note": profile.health_note,
+            # JSONB / list fields — sanitize nested free-text values
+            "allergies": [
+                {**a, "allergen": _safe(a.get("allergen", ""), 200)}
+                if isinstance(a, dict) else _safe(str(a), 200)
+                for a in (profile.allergies or [])
+            ],
+            "allergies_text": _safe(profile.allergies_text, 500),
+            "disliked_foods": [
+                {**d, "name": _safe(d.get("name", ""), 200)}
+                if isinstance(d, dict) else _safe(str(d), 200)
+                for d in (profile.disliked_foods or [])
+            ],
+            "disliked_foods_text": _safe(profile.disliked_foods_text, 500),
+            "preferred_foods": [
+                {**p, "name": _safe(p.get("name", ""), 200)}
+                if isinstance(p, dict) else _safe(str(p), 200)
+                for p in (profile.preferred_foods or [])
+            ],
+            "preferred_foods_text": _safe(profile.preferred_foods_text, 500),
+            # Long free-text notes — the primary stored-injection vector
+            "health_note": _safe(profile.health_note, 500),
             # Extended fields
             "usage_goal": profile.usage_goal.value if profile.usage_goal and hasattr(profile.usage_goal, "value") else profile.usage_goal,
-            "usage_goal_note": profile.usage_goal_note,
-            "health_conditions": profile.health_conditions,
+            "usage_goal_note": _safe(profile.usage_goal_note, 500),
+            # Nested JSONB — sanitize condition notes
+            "health_conditions": [
+                {**c, "note": _safe(c.get("note", ""), 200)}
+                if isinstance(c, dict) else c
+                for c in (profile.health_conditions or [])
+            ],
             "allergies_jsonb": profile.allergies,
-            "medications": profile.medications,
+            # Medications — sanitize drug names
+            "medications": [
+                {**m, "name": _safe(m.get("name", ""), 200)}
+                if isinstance(m, dict) else _safe(str(m), 200)
+                for m in (profile.medications or [])
+            ],
             "dietary_restrictions": profile.dietary_restrictions,
             "sleep_duration_hours": profile.sleep_duration_hours,
             "sleep_quality": profile.sleep_quality.value if profile.sleep_quality and hasattr(profile.sleep_quality, "value") else profile.sleep_quality,
-            "sleep_schedule": profile.sleep_schedule,
+            "sleep_schedule": _safe(profile.sleep_schedule, 100),
             "stress_level": profile.stress_level,
             "meal_frequency": profile.meal_frequency.value if profile.meal_frequency and hasattr(profile.meal_frequency, "value") else profile.meal_frequency,
             "cooking_preference": profile.cooking_preference.value if profile.cooking_preference and hasattr(profile.cooking_preference, "value") else profile.cooking_preference,
-            "wake_up_time": profile.wake_up_time,
-            "sleep_time": profile.sleep_time,
-            "work_schedule": profile.work_schedule,
+            "wake_up_time": _safe(profile.wake_up_time, 50),
+            "sleep_time": _safe(profile.sleep_time, 50),
+            "work_schedule": _safe(profile.work_schedule, 100),
             "taste_preferences": profile.taste_preferences,
             "cuisine_preferences": profile.cuisine_preferences,
             "favorite_foods": profile.favorite_foods,
@@ -330,15 +366,16 @@ async def build_chatbot_context(
         }
 
     # ── Conversation Insights ───────────────────────────────────────────────────
-    # Thông tin cốt lõi trích xuất từ các cuộc trò chuyện trước đó
     active_insights = await get_active_insights(db=db, user_id=user_id)
+    # FIX-7 (V-2): conversation_insights are AI-extracted from user messages,
+    # so sanitize the free-text fields before they re-enter the prompt.
     if active_insights:
         context["conversation_insights"] = [
             {
                 "type": insight.insight_type,
                 "key": insight.key,
-                "summary": insight.summary,
-                "value": insight.value,
+                "summary": sanitize_for_prompt(insight.summary, max_length=300),
+                "value": sanitize_for_prompt(str(insight.value), max_length=200),
             }
             for insight in active_insights
         ]

@@ -129,3 +129,131 @@ USAGE_GOAL_TO_NUTRITION_GOAL = {
     "pregnancy_nursing": "giu_can",
     "elderly_nutrition": "giu_can",
 }
+
+# ── Drug–Nutrient Interaction Rules ──────────────────────────────────────────────
+# Used by NutritionAdvisorAgent to hard-block foods that interact dangerously
+# with common medications. Keys are lowercase canonical drug names.
+# Each entry has:
+#   avoid       — list of food/ingredient identifiers (strings) to block from suggestions
+#   note        — informational warning appended to the disclaimer (optional)
+#   reason      — short clinical justification shown in the disclaimer
+DRUG_INTERACTIONS: dict[str, dict] = {
+    "warfarin": {
+        "avoid": [
+            "vitamin_k_rich",
+            "spinach",
+            "kale",
+            "rau cải",
+            "bắp cải",
+            "súp lơ xanh",
+            "rau bina",
+            "bông cải xanh",
+            "vitamin k",
+            "ngò",
+            "parsley",
+            "brussels sprouts",
+            "cải bó xôi",
+        ],
+        "reason": (
+            "Vitamin K trong rau xanh làm giảm hiệu quả của thuốc chống đông Warfarin. "
+            "Ăn nhiều rau xanh đậm có thể làm Warfarin kém hiệu quả, tăng nguy cơ huyết khối."
+        ),
+    },
+    "lisinopril": {
+        "avoid": [
+            "high_potassium",
+            "potassium_supplements",
+            "chuối",
+            "bơ",
+            "nước dừa",
+            "cam",
+            "cà chua",
+            "khoai tây",
+            "đậu",
+            "muối thay thế",
+            "potassium",
+            "banana",
+        ],
+        "reason": (
+            "Lisinopril là thuốc ức chế ACE, tăng nồng độ kali trong máu. "
+            "Thực phẩm giàu kali có thể gây tăng kali máu (hyperkalemia) — nguy hiểm."
+        ),
+    },
+    "metformin": {
+        "avoid": [],
+        "note": (
+            "Metformin dùng dài hạn có thể gây thiếu Vitamin B12. "
+            "Cần bổ sung B12 đầy đủ từ thịt, trứng, sữa hoặc thực phẩm bổ sung."
+        ),
+    },
+    "aspirin": {
+        "avoid": [
+            "alcohol",
+            "rượu",
+            "bia",
+            "thực phẩm có tính axit cao",
+            "nước cam",
+        ],
+        "reason": (
+            "Rượu và aspirin cùng uống tăng nguy cơ chảy máu dạ dày. "
+            "Tránh uống aspirin khi đói."
+        ),
+    },
+    "digoxin": {
+        "avoid": [
+            "high_fiber",
+            "chất xơ cao",
+            "bột yến mạch",
+            "ngũ cốc",
+            "activated charcoal",
+        ],
+        "reason": (
+            "Chất xơ cao làm giảm hấp thu Digoxin. "
+            "Uống digoxin ít nhất 2 giờ trước hoặc sau bữa ăn giàu chất xơ."
+        ),
+    },
+    "levothyroxine": {
+        "avoid": [
+            "caffeine",
+            "cà phê",
+            "trà",
+            "canxi",
+            "sữa",
+            "calcium",
+            "iron",
+            "sắt",
+            "thực phẩm giày canxi",
+            "thực phẩm giàu sắt",
+        ],
+        "reason": (
+            "Canxi và sắt hấp thụ cùng thuốc tuyến giáp làm giảm hiệu quả điều trị. "
+            "Uống levothyroxine cách các thực phẩm này ít nhất 4 giờ."
+        ),
+    },
+    "amlodipine": {
+        "avoid": [
+            "bưởi",
+            "nước bưởi",
+            "grapefruit",
+            "grapefruit juice",
+            "natto",
+            "nattō",
+        ],
+        "reason": (
+            "Bưởi ức chế enzyme CYP3A4, làm tăng nồng độ Amlodipine trong máu, "
+            "gây hạ huyết áp quá mức và tác dụng phụ."
+        ),
+    },
+    "statin": {
+        "avoid": [
+            "grapefruit",
+            "bưởi",
+            "nước bưởi",
+            "grapefruit juice",
+        ],
+        "reason": (
+            "Bưởi (đặc biệt nước bưởi) ức chế CYP3A4, tăng nồng độ statin trong máu, "
+            "gây nguy cơ tiêu cơ vân (rhabdomyolysis)."
+        ),
+    },
+}

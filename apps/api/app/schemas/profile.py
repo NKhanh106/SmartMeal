@@ -183,22 +183,27 @@ class UserProfileResponse(
     @computed_field
     @property
     def health_risk_flags(self) -> list[str]:
-        """
-        Return list of dietary risk flags based on active health conditions.
-        Maps to CONDITION_RULES keys.
-        """
-        flags: set[str] = set()
+        """Return list of dietary risk flags based on active health conditions."""
         if not self.health_conditions:
-            return sorted(flags)
+            return []
 
-        active_conditions = [
-            c for c in self.health_conditions
-            if isinstance(c, dict) and c.get("severity") != "resolved"
-        ]
+        flags: list[str] = []
 
-        for cond in active_conditions:
-            cond_id = cond.get("condition") if isinstance(cond, dict) else None
-            if cond_id and cond_id in CONDITION_RULES:
-                flags.update(CONDITION_RULES[cond_id])
+        for condition in self.health_conditions:
+            # Handle both dict (from JSONB) and HealthConditionItem object
+            if isinstance(condition, dict):
+                severity = condition.get("severity", "managed")
+                condition_id = condition.get("condition", "")
+            else:
+                severity = getattr(condition, "severity", "managed")
+                condition_id = getattr(condition, "condition", "")
 
-        return sorted(flags)
+            # Skip resolved conditions
+            if severity == "resolved":
+                continue
+
+            # Add rules for this condition
+            rules = CONDITION_RULES.get(condition_id, [])
+            flags.extend(rules)
+
+        return list(set(flags))  # deduplicate

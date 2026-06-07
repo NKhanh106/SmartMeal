@@ -6,9 +6,11 @@ import { ChatHeader } from "./ChatHeader";
 import { ChatMessageList } from "./ChatMessageList";
 import { ChatInput } from "./ChatInput";
 import { ChatSessionSidebar } from "./ChatSessionSidebar";
-import { ChatCardContainer } from "./cards/ChatCardContainer";
+import { ChatCardContainer, UpdateProposalCard } from "./cards";
 import type { ChatMessage, ChatSession, StaleSessionWarning, MealLogCardData } from "./types";
 import type { ChatCard, ChatCardResponse } from "./types";
+import type { DepthMode } from "./DepthSelector";
+import type { UpdateProposal } from "@/types/update-proposal";
 
 interface ChatPanelProps {
   isOpen: boolean;
@@ -23,8 +25,16 @@ interface ChatPanelProps {
   showSidebar: boolean;
   pendingCard: ChatCard | null;
   isCardLoading: boolean;
+  depth: DepthMode;
+  // Proposal state
+  pendingProposals: UpdateProposal[];
+  proposalLoading: string | null;
+  onConfirmProposal: (proposalId: string) => void;
+  onRejectProposal: (proposalId: string) => void;
+  // Handlers
   onInputChange: (value: string) => void;
   onSend: () => void;
+  onDepthChange: (depth: DepthMode) => void;
   onMinimize: () => void;
   onToggleSidebar: () => void;
   onSelectSession: (session: ChatSession) => void;
@@ -53,8 +63,14 @@ export function ChatPanel({
   showSidebar,
   pendingCard,
   isCardLoading,
+  depth,
+  pendingProposals,
+  proposalLoading,
+  onConfirmProposal,
+  onRejectProposal,
   onInputChange,
   onSend,
+  onDepthChange,
   onMinimize,
   onToggleSidebar,
   onSelectSession,
@@ -137,6 +153,7 @@ export function ChatPanel({
               messages={messages}
               mealLogs={mealLogs}
               isTyping={isTyping}
+              depth={depth}
               onEditMealLog={onEditMealLog}
               onRemoveMealLog={onRemoveMealLog}
               onRetry={onRetry}
@@ -192,16 +209,31 @@ export function ChatPanel({
               )}
             </AnimatePresence>
 
+            {/* Update Proposals (appear above input, below messages) */}
+            <AnimatePresence>
+              {pendingProposals.map((proposal) => (
+                <UpdateProposalCard
+                  key={proposal.proposal_id}
+                  proposal={proposal}
+                  onConfirm={onConfirmProposal}
+                  onReject={onRejectProposal}
+                  isLoading={proposalLoading === proposal.proposal_id}
+                />
+              ))}
+            </AnimatePresence>
+
             {/* Input */}
             <ChatInput
               value={inputValue}
+              depth={depth}
               onChange={onInputChange}
+              onDepthChange={onDepthChange}
               onSend={onSend}
               disabled={isTyping || inputDisabled}
               placeholder={
                 pendingCard
                   ? "Vui lòng trả lời câu hỏi trên..."
-                  : "Nhắn tin..."
+                  : undefined
               }
             />
           </div>

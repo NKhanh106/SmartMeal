@@ -10,6 +10,8 @@ import type {
   ChatCard,
   ChatCardResponse,
 } from "@/components/chatbot/types";
+import type { UpdateProposal } from "@/types/update-proposal";
+import { confirmProposal as apiConfirmProposal, rejectProposal as apiRejectProposal } from "@/services/proposal.service";
 import {
   chatbotService,
   getCachedSessionId,
@@ -20,8 +22,11 @@ import {
   deleteSession,
   renameSession,
   checkStaleSession,
+  skipCard as apiSkipCard,
 } from "@/services/chatbot.service";
 import { mealService } from "@/services/meal.service";
+import { getAccessToken } from "@/lib/api-client";
+import { useAuth } from "@/contexts/auth-context";
 
 const WELCOME_MESSAGE: ChatMessage = {
   id: "welcome",
@@ -31,11 +36,39 @@ const WELCOME_MESSAGE: ChatMessage = {
   timestamp: new Date(),
 };
 
+// ─── Depth Preference Hook ───────────────────────────────────────────────────────
+
+const DEPTH_STORAGE_KEY = "smartmeal_depth_preference";
+
+export type DepthMode = "quick" | "deep" | "expert";
+
+function useDepthPreference() {
+  const [depth, setDepthState] = useState<DepthMode>("deep");
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const stored = localStorage.getItem(DEPTH_STORAGE_KEY);
+    if (stored === "quick" || stored === "deep" || stored === "expert") {
+      setDepthState(stored);
+    }
+  }, []);
+
+  const setDepth = useCallback((newDepth: DepthMode) => {
+    setDepthState(newDepth);
+    localStorage.setItem(DEPTH_STORAGE_KEY, newDepth);
+  }, []);
+
+  return { depth, setDepth };
+}
+
+// ─── Main Hook ────────────────────────────────────────────────────────────────
+
 export interface ChatSessionWithMeta extends ChatSession {
   isLoading?: boolean;
 }
 
 export function useChatBot() {
+  const { user } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [mealLogs, setMealLogs] = useState<MealLogCardData[]>([]);
@@ -45,14 +78,35 @@ export function useChatBot() {
   const [currentSession, setCurrentSession] = useState<ChatSession | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [staleWarning, setStaleWarning] = useState<StaleSessionWarning | null>(null);
-  // ── Card state ──────────────────────────────────────────────────────────────
   const [pendingCard, setPendingCard] = useState<ChatCard | null>(null);
   const [isCardLoading, setIsCardLoading] = useState(false);
-  // ── End card state ──────────────────────────────────────────────────────────
+  const [pendingProposals, setPendingProposals] = useState<UpdateProposal[]>([]);
+  const [proposalLoading, setProposalLoading] = useState<string | null>(null);
+
+  // Depth mode state
+  const { depth, setDepth } = useDepthPreference();
+  const currentDepthRef = useRef<DepthMode>("deep");
 
   const queryClient = useQueryClient(); // Invalidate dashboard/history after meal log mutations
   const abortRef = useRef<AbortController | null>(null);
   const historyLoadedRef = useRef(false);
+  const pendingProposalsRef = useRef<UpdateProposal[]>([]);
+  const prevUserIdRef = useRef<string | null | undefined>(undefined);
+
+  // Keep pendingProposals ref in sync
+  useEffect(() => {
+    pendingProposalsRef.current = pendingProposals;
+  }, [pendingProposals]);
+
+  // Cleanup AbortController and EventSource on unmount
+  useEffect(() => {
+    return () => {
+      if (abortRef.current) {
+        abortRef.current.abort();
+        abortRef.current = null;
+      }
+    };
+  }, []);
 
   // ── Define callbacks before effects that use them ────────────────────────────
 
@@ -81,6 +135,37 @@ export function useChatBot() {
       historyLoadedRef.current = true;
     }
   }, []);
+
+  // Reset chatbot state when user changes (logout, or login as different account)
+  useEffect(() => {
+    const currentUserId = user ? String(user.id) : null;
+
+    // Skip initial mount (prevUserIdRef starts as null on purpose)
+    if (prevUserIdRef.current === undefined) {
+      prevUserIdRef.current = currentUserId;
+      return;
+    }
+
+    const prevUserId = prevUserIdRef.current;
+
+    // User changed (logout → null, or switched to a different user)
+    if (prevUserId !== currentUserId) {
+      setMessages([]);
+      setSessions([]);
+      setCurrentSession(null);
+      setStaleWarning(null);
+      setPendingCard(null);
+      setPendingProposals([]);
+      historyLoadedRef.current = false;
+
+      // Auto-load new user's sessions if chatbot is already open
+      if (isOpen) {
+        loadSessionsAndResume();
+      }
+    }
+
+    prevUserIdRef.current = currentUserId;
+  }, [user, isOpen, loadSessionsAndResume]);
 
   // Initialize: load sessions and auto-resume latest
   useEffect(() => {
@@ -233,18 +318,40 @@ export function useChatBot() {
         buffer = lines.pop() || "";
 
         for (const line of lines) {
-          // Check for SSE event: card
+          // Handle SSE named events
           if (line.startsWith("event: card\ndata: ")) {
             const jsonStr = line.slice("event: card\ndata: ".length);
             try {
               const card = JSON.parse(jsonStr) as ChatCard;
               setPendingCard(card);
               setIsTyping(false);
-              // Remove the streaming placeholder since a card was emitted
               setMessages((prev) => prev.filter((m) => m.id !== tempAssistantId));
-              return; // Done handling — card awaits user response
+              return;
             } catch {
               // Malformed card JSON — ignore
+            }
+            continue;
+          }
+
+          if (line.startsWith("event: depth\ndata: ")) {
+            const confirmedDepth = line.slice("event: depth\ndata: ".length).trim();
+            if (confirmedDepth === "quick" || confirmedDepth === "deep" || confirmedDepth === "expert") {
+              currentDepthRef.current = confirmedDepth;
+            }
+            continue;
+          }
+
+          if (line.startsWith("event: update_proposal\ndata: ")) {
+            const jsonStr = line.slice("event: update_proposal\ndata: ".length);
+            try {
+              const proposal = JSON.parse(jsonStr) as UpdateProposal;
+              setPendingProposals((prev) =>
+                prev.find((p) => p.proposal_id === proposal.proposal_id)
+                  ? prev
+                  : [...prev, proposal]
+              );
+            } catch {
+              // Malformed proposal JSON — ignore
             }
             continue;
           }
@@ -263,7 +370,9 @@ export function useChatBot() {
             if (data.done) {
               setMessages((prev) =>
                 prev.map((m) =>
-                  m.id === tempAssistantId ? { ...m, isStreaming: false } : m
+                  m.id === tempAssistantId
+                    ? { ...m, isStreaming: false, depth: currentDepthRef.current }
+                    : m
                 )
               );
               setStaleWarning(null);
@@ -301,6 +410,67 @@ export function useChatBot() {
     []
   );
 
+  const _addSystemMessage = useCallback((content: string) => {
+    const systemMsg: ChatMessage = {
+      id: `sys-${Date.now()}`,
+      role: "assistant",
+      content,
+      timestamp: new Date(),
+    };
+    setMessages((prev) => [...prev, systemMsg]);
+  }, []);
+
+  const confirmProposal = useCallback(
+    async (proposalId: string) => {
+      if (!currentSession?.id) return;
+      const token = getAccessToken();
+      if (!token) return;
+      setProposalLoading(proposalId);
+      try {
+        const result = await apiConfirmProposal(currentSession.id, proposalId, token);
+        setPendingProposals((prev) =>
+          prev.filter((p) => p.proposal_id !== proposalId)
+        );
+        _addSystemMessage(result.message);
+        // Invalidate relevant caches based on proposal target
+        const proposal = pendingProposalsRef.current.find((p) => p.proposal_id === proposalId);
+        if (proposal) {
+          if (proposal.target === "meal_log") {
+            queryClient.invalidateQueries({ queryKey: ["meals"] });
+            queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+          }
+          if (proposal.target === "body_weight") {
+            queryClient.invalidateQueries({ queryKey: ["progress"] });
+            queryClient.invalidateQueries({ queryKey: ["profile"] });
+          }
+          if (proposal.target === "nutrition_goal") {
+            queryClient.invalidateQueries({ queryKey: ["nutrition-goals"] });
+          }
+          if (proposal.target === "workout_log") {
+            queryClient.invalidateQueries({ queryKey: ["workouts"] });
+          }
+        }
+      } catch (err) {
+        console.error("Failed to confirm proposal:", err);
+      } finally {
+        setProposalLoading(null);
+      }
+    },
+    [currentSession, queryClient, _addSystemMessage]
+  );
+
+  const rejectProposal = useCallback(
+    async (proposalId: string) => {
+      if (!currentSession?.id) return;
+      const token = getAccessToken();
+      setPendingProposals((prev) =>
+        prev.filter((p) => p.proposal_id !== proposalId)
+      );
+      apiRejectProposal(currentSession.id, proposalId, token ?? "").catch(console.error);
+    },
+    [currentSession]
+  );
+
   const _ensureSession = useCallback(async (): Promise<string | null> => {
     let sessionId = currentSession?.id || getCachedSessionId();
     if (!sessionId) {
@@ -323,13 +493,14 @@ export function useChatBot() {
     async (
       sessionId: string,
       content: string,
+      depth: DepthMode,
       tempAssistantId: string,
       errorContent: string
     ) => {
       abortRef.current?.abort();
       abortRef.current = new AbortController();
 
-      const token = localStorage.getItem("smartmeal_access_token");
+      const token = getAccessToken();
       const response = await fetch(
         `${process.env.NEXT_PUBLIC_API_BASE_URL ?? ""}/api/v1/ai/chat/sessions/${sessionId}/messages/stream`,
         {
@@ -338,24 +509,30 @@ export function useChatBot() {
             "Content-Type": "application/json",
             Authorization: `Bearer ${token ?? ""}`,
           },
-          body: JSON.stringify({ content }),
+          body: JSON.stringify({ content, depth }),
           signal: abortRef.current.signal,
         }
       );
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-      await _handleStreamEvents(response.body!.getReader(), tempAssistantId);
+      if (!response.body) {
+        throw new Error("Response body is null — server may not support streaming");
+      }
+
+      await _handleStreamEvents(response.body.getReader(), tempAssistantId);
     },
     [_handleStreamEvents]
   );
 
   const sendMessageStream = useCallback(
-    async (content: string) => {
+    async (content: string, depth: DepthMode = "deep") => {
       if (!content.trim() || isTyping) return;
 
       const sessionId = await _ensureSession();
       if (!sessionId) return;
+
+      currentDepthRef.current = depth;
 
       const tempUserMsg: ChatMessage = {
         id: `msg-${Date.now()}-user`,
@@ -381,6 +558,7 @@ export function useChatBot() {
         await _streamFetch(
           sessionId,
           content.trim(),
+          depth,
           tempAssistantId,
           "Xin lỗi, tôi đang gặp sự cố kết nối. Vui lòng thử lại trong giây lát."
         );
@@ -429,7 +607,7 @@ export function useChatBot() {
       setMessages((prev) => [...prev, tempAssistantMsg]);
 
       try {
-        const token = localStorage.getItem("smartmeal_access_token");
+        const token = getAccessToken();
         const res = await fetch(
           `${process.env.NEXT_PUBLIC_API_BASE_URL ?? ""}/api/v1/ai/chat/sessions/${sessionId}/card-response`,
           {
@@ -444,7 +622,10 @@ export function useChatBot() {
 
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-        await _handleStreamEvents(res.body!.getReader(), tempAssistantId);
+        const body = res.body;
+        if (!body) throw new Error("Response body is null");
+
+        await _handleStreamEvents(body.getReader(), tempAssistantId);
       } catch (err) {
         _handleStreamError(
           err,
@@ -461,8 +642,12 @@ export function useChatBot() {
 
   const skipCard = useCallback(() => {
     if (!pendingCard?.skippable) return;
+    // Notify backend for anti-loop protection
+    if (currentSession?.id) {
+      apiSkipCard(currentSession.id).catch(console.error);
+    }
     setPendingCard(null);
-  }, [pendingCard]);
+  }, [pendingCard, currentSession]);
 
   // ── Non-streaming sendMessage (unchanged) ───────────────────────────────────
 
@@ -535,6 +720,14 @@ export function useChatBot() {
     // Card state
     pendingCard,
     isCardLoading,
+    // Proposal state
+    pendingProposals,
+    proposalLoading,
+    confirmProposal,
+    rejectProposal,
+    // Depth mode state
+    depth,
+    setDepth,
     // Actions
     setInputValue,
     openChat,

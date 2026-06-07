@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 from enum import Enum
@@ -46,6 +47,9 @@ class CircuitBreaker:
         self._failure_count = 0
         self._success_count = 0
         self._last_failure_time: float = 0
+        # FIX-8 (C-5): Serializes state transitions across concurrent coroutines.
+        # Prevents duplicate HALF_OPEN → CLOSED log messages and TOCTOU races.
+        self._transition_lock = asyncio.Lock()
 
     @property
     def state(self) -> CircuitState:
@@ -59,30 +63,37 @@ class CircuitBreaker:
     def is_available(self) -> bool:
         return self.state != CircuitState.OPEN
 
-    def record_success(self) -> None:
+    async def record_success(self) -> None:
         self._failure_count = 0
-        if self._state == CircuitState.HALF_OPEN:
-            self._success_count += 1
-            if self._success_count >= self.success_threshold:
-                logger.info("Circuit [%s]: HALF_OPEN → CLOSED ✅", self.name)
-                self._state = CircuitState.CLOSED
-                self._success_count = 0
+        # FIX-8 (C-5): Acquire lock before checking/transitioning HALF_OPEN → CLOSED.
+        # This prevents two concurrent coroutines from both transitioning and
+        # emitting duplicate log messages.
+        async with self._transition_lock:
+            if self._state == CircuitState.HALF_OPEN:
+                self._success_count += 1
+                if self._success_count >= self.success_threshold:
+                    logger.info("Circuit [%s]: HALF_OPEN → CLOSED ✅", self.name)
+                    self._state = CircuitState.CLOSED
+                    self._success_count = 0
 
-    def record_failure(self) -> None:
+    async def record_failure(self) -> None:
         self._failure_count += 1
         self._last_failure_time = time.time()
-        if self._state == CircuitState.HALF_OPEN:
-            logger.warning("Circuit [%s]: HALF_OPEN → OPEN 🔴 (failure during recovery test)", self.name)
-            self._state = CircuitState.OPEN
-            self._success_count = 0
-        elif self._failure_count >= self.failure_threshold:
-            logger.warning(
-                "Circuit [%s]: → OPEN 🔴 (failures=%d, will retry in %ds)",
-                self.name,
-                self._failure_count,
-                self.recovery_timeout,
-            )
-            self._state = CircuitState.OPEN
+        # FIX-8 (C-5): Lock prevents simultaneous HALF_OPEN → OPEN transitions
+        # from two concurrent failure callbacks.
+        async with self._transition_lock:
+            if self._state == CircuitState.HALF_OPEN:
+                logger.warning("Circuit [%s]: HALF_OPEN → OPEN 🔴 (failure during recovery test)", self.name)
+                self._state = CircuitState.OPEN
+                self._success_count = 0
+            elif self._failure_count >= self.failure_threshold:
+                logger.warning(
+                    "Circuit [%s]: → OPEN 🔴 (failures=%d, will retry in %ds)",
+                    self.name,
+                    self._failure_count,
+                    self.recovery_timeout,
+                )
+                self._state = CircuitState.OPEN
 
     async def call(self, func: Callable, *args, **kwargs) -> Any:
         if not self.is_available():
@@ -92,10 +103,10 @@ class CircuitBreaker:
             )
         try:
             result = await func(*args, **kwargs)
-            self.record_success()
+            await self.record_success()
             return result
         except Exception as e:
-            self.record_failure()
+            await self.record_failure()
             raise
 
 

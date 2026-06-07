@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta, timezone
+import json
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from jose import jwt
 from sqlalchemy import select
@@ -14,13 +15,25 @@ from app.core.config import settings
 from app.core.security import ALGORITHM, create_access_token, create_refresh_token, get_password_hash, verify_password
 from app.db.session import get_db
 from app.models.user import User
-from app.schemas.token import Token
 from app.schemas.user import UserCreate, UserResponse, UserUpdate
+from app.services.daily_recommendation_service import invalidate_user_plan_cache
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
+# Atomic token rotation: SET NX with TTL, returns 1 if key was set (token not yet used), 0 if already exists.
+LUA_ROTATE = """
+local result = redis.call('SET', KEYS[1], '1', 'NX', 'EX', ARGV[1])
+if result then
+  return 1
+else
+  return 0
+end
+"""
+# TTL for used-refresh keys matches refresh token lifetime (7 days in seconds).
+ROTATE_TTL = 7 * 24 * 3600
 
-@router.post("/login", response_model=Token)
+
+@router.post("/login")
 @limiter.limit("10/minute")
 async def login_access_token(
     request: Request,
@@ -60,12 +73,27 @@ async def login_access_token(
     await db.commit()
 
     expires_delta = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    return {
-        "access_token": create_access_token(user.id, expires_delta=expires_delta),
-        "refresh_token": create_refresh_token(str(user.id)),
-        "token_type": "bearer",
-        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-    }
+    access_token = create_access_token(user.id, expires_delta=expires_delta)
+    refresh_token = create_refresh_token(str(user.id))
+
+    response = Response(
+        content=json.dumps({
+            "access_token": access_token,
+            "token_type": "bearer",
+            "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        }),
+        media_type="application/json",
+    )
+    response.set_cookie(
+        key="smartmeal_refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        max_age=7 * 24 * 3600,
+        path="/api/auth/refresh",
+    )
+    return response
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -134,6 +162,7 @@ async def update_current_user(
             detail="Could not update user profile.",
         )
 
+    await invalidate_user_plan_cache(current_user.id)
     await db.refresh(current_user)
     return current_user
 
@@ -142,15 +171,23 @@ async def update_current_user(
 @limiter.limit("30/minute")
 async def refresh_access_token(
     request: Request,
-    refresh_token: str,
+    response: Response,
+    refresh_token: str | None = Cookie(None, alias="smartmeal_refresh_token"),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Exchange a valid refresh token for a new access token.
+    Exchange a valid refresh token (from httpOnly cookie) for a new access token.
     Refresh token rotation: a used refresh token is immediately invalidated
     to prevent replay attacks.
     """
     from jose import JWTError as JoseJWTError
+    from app.core.cache import get_redis
+
+    if not refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No refresh token provided.",
+        )
 
     try:
         payload = jwt.decode(
@@ -164,7 +201,8 @@ async def refresh_access_token(
                 detail="Invalid token type.",
             )
         user_id = payload.get("sub")
-        if not user_id:
+        jti = payload.get("jti")
+        if not user_id or not jti:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token payload.",
@@ -173,6 +211,27 @@ async def refresh_access_token(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired refresh token.",
+        )
+
+    # Atomic rotation: try to mark token as used. Deny (503) if Redis is unavailable.
+    try:
+        redis = await get_redis()
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service temporarily unavailable.",
+        )
+    try:
+        acquired = await redis.eval(LUA_ROTATE, 1, f"used_refresh:{jti}", ROTATE_TTL)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service temporarily unavailable.",
+        )
+    if not acquired:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token has already been used.",
         )
 
     # Verify user still exists and is active
@@ -184,10 +243,58 @@ async def refresh_access_token(
             detail="User not found or inactive.",
         )
 
+    # Issue new tokens
     expires_delta = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     new_access_token = create_access_token(user.id, expires_delta=expires_delta)
-    return {
-        "access_token": new_access_token,
-        "token_type": "bearer",
-        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-    }
+    new_refresh_token = create_refresh_token(str(user.id))
+
+    response = Response(
+        content=json.dumps({
+            "access_token": new_access_token,
+            "token_type": "bearer",
+            "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        }),
+        media_type="application/json",
+    )
+    response.set_cookie(
+        key="smartmeal_refresh_token",
+        value=new_refresh_token,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        max_age=7 * 24 * 3600,
+        path="/api/auth/refresh",
+    )
+    return response
+
+
+@router.post("/logout")
+async def logout(request: Request, response: Response):
+    """
+    Clear the refresh token cookie and revoke it in Redis using the token's jti.
+    Clears the cookie regardless of Redis availability (client-side protection always works).
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    refresh_token = request.cookies.get("smartmeal_refresh_token")
+    if refresh_token:
+        try:
+            payload = jwt.decode(
+                refresh_token,
+                settings.SECRET_KEY,
+                algorithms=[ALGORITHM],
+            )
+            jti = payload.get("jti")
+            if jti:
+                redis = await get_redis()
+                await redis.setex(f"used_refresh:{jti}", ROTATE_TTL, "1")
+        except Exception:
+            logger.warning("logout: failed to revoke refresh token in Redis (degraded — cookie still cleared)")
+
+    response = Response(content=json.dumps({"message": "Logged out"}), media_type="application/json")
+    response.delete_cookie(
+        key="smartmeal_refresh_token",
+        path="/api/auth/refresh",
+    )
+    return response

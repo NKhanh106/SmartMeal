@@ -19,6 +19,7 @@ from app.schemas.nutrition_goal import (
     NutritionGoalUpdate,
 )
 from app.services.nutrition_service import calculate_nutrition_targets
+from app.services.daily_recommendation_service import invalidate_user_plan_cache
 
 router = APIRouter(prefix="/nutrition-goals", tags=["Nutrition Goals"])
 
@@ -88,6 +89,7 @@ async def create_nutrition_goal(
             detail="Could not create nutrition goal because of a data conflict.",
         )
 
+    await invalidate_user_plan_cache(current_user.id)
     await db.refresh(new_goal)
     return new_goal
 
@@ -139,6 +141,7 @@ async def update_nutrition_goal(
             detail="Could not update nutrition goal because of a data conflict.",
         )
 
+    await invalidate_user_plan_cache(goal.user_id)
     await session.refresh(goal)
     return goal
 

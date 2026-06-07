@@ -37,11 +37,13 @@ class Settings(BaseSettings):
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: str = "5432"
     DATABASE_URL: str = ""
+    DATABASE_POOL_URL: str | None = None  # FIX-5: Pooled URL for FastAPI runtime (PgBouncer port 6543)
     TEST_DATABASE_URL: str | None = None
 
     @computed_field
     @property
     def ASYNC_DATABASE_URL(self) -> str:
+        """Async URL for Alembic migrations — always uses DATABASE_URL (Direct, port 5432)."""
         if self.DATABASE_URL.startswith("postgresql+asyncpg://"):
             return self.DATABASE_URL
         if self.DATABASE_URL.startswith("postgresql://"):
@@ -50,6 +52,23 @@ class Settings(BaseSettings):
             f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
             f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
         )
+
+    @computed_field
+    @property
+    def ASYNC_DATABASE_POOL_URL(self) -> str:
+        """
+        FIX-5: Async URL for FastAPI runtime — uses DATABASE_POOL_URL (PgBouncer port 6543).
+
+        Priority:
+          1. DATABASE_POOL_URL  — Pooled connection (recommended for app runtime)
+          2. DATABASE_URL        — Direct connection fallback (dev / no pooler configured)
+
+        DATABASE_POOL_URL should include ?pgbouncer=true to signal transaction pooling mode.
+        """
+        url = self.DATABASE_POOL_URL or self.DATABASE_URL
+        if url.startswith("postgresql://"):
+            return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return url
 
     AI_MEAL_PROVIDER: str = "gemini"
     AI_CHAT_PROVIDER: str = "groq"
@@ -64,6 +83,9 @@ class Settings(BaseSettings):
 
     USDA_API_KEY: str = ""
 
+    TAVILY_API_KEY: str = ""
+    TAVILY_ENABLED: bool = True
+
 
     # ── Redis Cache Settings ──────────────────────────────────────────────────────
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -71,6 +93,38 @@ class Settings(BaseSettings):
     AI_CACHE_TTL_SECONDS: int = 3600          # Cache AI result 1 hour
     FOOD_RECOGNITION_CACHE_TTL: int = 86400   # Cache food recognition 24 hours
     DAILY_PLAN_CACHE_TTL: int = 43200         # Cache daily plan 12 hours
+
+    # ── Database Connection Pool (tuned for Supabase PgBouncer) ───────────────────
+    # Supabase uses PgBouncer in transaction mode as a connection pooler.
+    # Two-tier pooling: app pool (SQLAlchemy) sits behind PgBouncer pool.
+    #
+    # FIX-8 (C-1, C-7): pool_size=4, bg_limit=4 per worker process.
+    # The extractor_queue_worker_loop consumes 1 connection during extraction (~3-10s).
+    # max_overflow=12 provides headroom so the queue worker + burst HTTP requests
+    # never exhaust the pool.
+    #
+    # Per-worker ceiling: pool_size + max_overflow = 4 + 12 = 16 connections
+    # 4 workers × 16 = 64 max — safely below Supabase free tier (60) but tight;
+    # increase workers or reduce overflow if deploying to a tighter limit.
+    #
+    # Key settings for transaction-mode PgBouncer:
+    # - pool_pre_ping: disabled (PgBouncer handles connection health)
+    # - pool_recycle: 30 min (PgBouncer sessions expire after 60 min idle)
+    # - connect_args.statement_cache_size = 0 (asyncpg, see session.py)
+    #   disables prepared statements — required because PgBouncer cannot share
+    #   prepared statements across connections (each statement is parsed per-connection).
+    DATABASE_POOL_SIZE: int = 4
+    DATABASE_MAX_OVERFLOW: int = 12
+    DATABASE_POOL_TIMEOUT: int = 30
+    DATABASE_POOL_RECYCLE: int = 1800   # 30 minutes — PgBouncer max idle is 60 min
+    DATABASE_POOL_PRE_PING: bool = False
+
+    # ── Background Task Concurrency ─────────────────────────────────────────────
+    # FIX-8 (C-1): bg_limit=4 equals pool_size=4 per worker.
+    # With max_overflow=12, the pool provides headroom for the queue worker.
+    # Background tasks hold connections for the full LLM call duration (~3-10s),
+    # so the semaphore prevents runaway concurrency.
+    BACKGROUND_TASK_CONCURRENCY_LIMIT: int = 4
 
 
     @model_validator(mode="after")

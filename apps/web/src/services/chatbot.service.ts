@@ -146,6 +146,14 @@ export async function checkStaleSession(sessionId: string): Promise<StaleSession
   return api.get<StaleSessionWarning>(`${CHATBOT_SESSION_ENDPOINT}/${sessionId}/stale`);
 }
 
+/**
+ * Tell backend that user skipped a clarification card.
+ * Used for anti-loop protection.
+ */
+export async function skipCard(sessionId: string): Promise<void> {
+  await api.post(`${CHATBOT_SESSION_ENDPOINT}/${sessionId}/card-skip`, {});
+}
+
 // ─── Messages ─────────────────────────────────────────────────────────────────
 
 /**

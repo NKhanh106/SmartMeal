@@ -13,7 +13,7 @@ from sqlalchemy import (
     Index,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from app.db.session import Base
@@ -40,6 +40,8 @@ class UserMemory(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
+
+    user: Mapped["User"] = relationship("User", back_populates="memory")
 
     # ── Body State (updated frequently) ─────────────────────────────────────────
     # Schema:

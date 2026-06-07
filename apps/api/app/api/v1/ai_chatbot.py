@@ -21,7 +21,7 @@ from app.chatbot.service import (
     soft_delete_session,
     update_session_title,
 )
-from app.db.session import get_db
+from app.db.session import AsyncSessionLocal, get_db
 from app.models.chat import ChatSession
 from app.models.user import User
 from app.schemas.chat import (
@@ -36,6 +36,9 @@ from app.schemas.chat import (
     StaleSessionWarning,
 )
 from app.schemas.chat_card import ChatCardResponse
+from app.schemas.update_proposal import UpdateProposal
+from app.agents.data_writers import execute_confirmed_update
+from app.core.cache import get_redis
 
 router = APIRouter(prefix="/ai/chat", tags=["AI Chatbot"])
 
@@ -173,6 +176,7 @@ async def check_session_stale(
 
 
 @router.post("/sessions/{session_id}/messages", response_model=ChatSendMessageResponse)
+@limiter.limit("30/minute")
 async def send_message(
     request: Request,
     session_id: UUID,
@@ -224,7 +228,9 @@ async def send_message_stream(
             user_message=payload.content,
             session_id=session_id,
             user=current_user,
-            db=db
+            db=db,  # closed above — only used for non-DB cleanup paths now
+            session_factory=AsyncSessionLocal,
+            depth=payload.depth,
         ),
         media_type="text/event-stream",
         headers={
@@ -249,8 +255,17 @@ async def submit_card_response(
     2. Map card response → profile update (goal, weight)
     3. Inject natural-language summary as a user message
     4. Resume AI processing and stream the response
+    5. Record anti-loop state in Redis (for clarification cards)
     """
     session = await _get_session_for_current_user(db, session_id, current_user)
+
+    # Record anti-loop state for clarification cards
+    try:
+        from app.agents.multi_agent_orchestrator import MultiAgentOrchestrator
+        orch = MultiAgentOrchestrator()
+        await orch.record_clarification_answered(str(session_id))
+    except Exception:
+        pass
 
     async def generate():
         async for event in process_card_response_and_stream(
@@ -258,8 +273,13 @@ async def submit_card_response(
             session=session,
             card_response=response_payload,
             user_id=current_user.id,
+            session_factory=AsyncSessionLocal,
         ):
             yield event
+
+    # Release DB connection before streaming — process_card_response_and_stream uses
+    # AsyncSessionLocal for any DB work during the stream phase.
+    await db.close()
 
     return StreamingResponse(
         generate(),
@@ -269,6 +289,26 @@ async def submit_card_response(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/sessions/{session_id}/card-skip")
+async def skip_card(
+    session_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Called when user skips (dismisses) a clarification card.
+    Records anti-loop state to prevent immediate re-asking.
+    """
+    await _get_session_for_current_user(db, session_id, current_user)
+    try:
+        from app.agents.multi_agent_orchestrator import MultiAgentOrchestrator
+        orch = MultiAgentOrchestrator()
+        await orch.record_clarification_skipped(str(session_id))
+    except Exception:
+        pass
+    return {"success": True}
 
 
 async def _get_session_for_current_user(
@@ -284,3 +324,60 @@ async def _get_session_for_current_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found.")
     ensure_user_access(current_user, session.user_id)
     return session
+
+
+@router.post("/sessions/{session_id}/proposals/{proposal_id}/confirm")
+async def confirm_update_proposal(
+    session_id: UUID,
+    proposal_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    User confirmed an update proposal via UpdateProposalCard.
+    Loads proposal from Redis and executes the DB write.
+    Uses atomic GETDEL to prevent race conditions when two confirm requests race.
+    """
+    redis = await get_redis()
+    proposal_key = f"proposal:{current_user.id}:{proposal_id}"
+
+    # Atomic get-and-delete: prevents race condition between concurrent confirm requests
+    raw = await redis.getdel(proposal_key)
+
+    if not raw:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Đề xuất đã hết hạn, đã được xử lý, hoặc không tìm thấy.",
+        )
+
+    try:
+        proposal = UpdateProposal.model_validate_json(raw)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid proposal data.",
+        )
+
+    if str(proposal.session_id) != str(session_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Session mismatch.")
+
+    result = await execute_confirmed_update(proposal, int(current_user.id), db)
+
+    return {
+        "success": result.success,
+        "message": result.message,
+        "records_created": result.records_created,
+        "records_updated": result.records_updated,
+    }
+
+
+@router.post("/sessions/{session_id}/proposals/{proposal_id}/reject")
+async def reject_update_proposal(
+    session_id: UUID,
+    proposal_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """User rejected an update proposal — clean up from Redis."""
+    redis = await get_redis()
+    await redis.delete(f"proposal:{current_user.id}:{proposal_id}")
+    return {"success": True, "message": "Da bo qua"}

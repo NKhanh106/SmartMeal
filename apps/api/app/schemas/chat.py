@@ -33,6 +33,11 @@ class ChatSessionResponse(BaseModel):
 
 class ChatMessageCreate(BaseModel):
     content: str = Field(..., min_length=1)
+    depth: str = Field(
+        default="deep",
+        pattern="^(quick|deep|expert)$",
+        description="Response depth mode: quick (fast, concise), deep (balanced), expert (comprehensive)",
+    )
 
 
 class ChatMessageResponse(BaseModel):

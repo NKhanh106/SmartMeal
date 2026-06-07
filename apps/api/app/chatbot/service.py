@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from fastapi import BackgroundTasks, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.factory import get_ai_provider
 from app.agents.base import AgentContext
@@ -27,16 +27,13 @@ from app.chatbot.prompts import (
     build_chatbot_user_prompt,
 )
 from app.chatbot.utils import build_chat_title
+from app.core.background import create_tracked_task
 from app.core.config import settings
 from app.models.chat import ChatMessage, ChatSession
 from app.models.user_profile import UserProfile
 from app.schemas.chat import StaleSessionWarning
 from app.schemas.chat_card import ChatCard, ChatCardResponse
 from app.services.ai_log_service import create_ai_log
-from app.services.conversation_insights_service import (
-    extract_insights_from_conversation,
-    upsert_conversation_insights,
-)
 
 logger = logging.getLogger("smartmeal.chatbot")
 
@@ -393,20 +390,9 @@ async def send_chat_message(
         else settings.GROQ_TEXT_MODEL
     )
 
-    # Check for meal command BEFORE sending to AI
-    from app.services.meal_extraction_service import detect_meal_command, process_meal_command
-
-    is_meal_command, food_mention = detect_meal_command(user_content)
-    meal_command_logged = False
-    meal_command_response = None
-
-    if is_meal_command and food_mention:
-        # Process meal command immediately
-        meal_log, response = await process_meal_command(db, user_id, food_mention)
-        if meal_log:
-            meal_command_response = response
-            meal_command_logged = True
-            logger.info(f"Meal command processed: {food_mention}")
+    # NOTE: Regex-based meal command detection has been removed from this path.
+    # ExtractorAgent handles all meal extraction. Explicit meal commands in user messages
+    # will be caught by ExtractorAgent's extraction schema. No direct DB writes here.
 
     # ── Web research check ─────────────────────────────────────────────────
     # Run in parallel with AI response when triggered (non-blocking)
@@ -456,7 +442,10 @@ async def send_chat_message(
     try:
         # Fire-and-forget: web research runs in background
         # Results are saved to agent_insights and available on next message turn
-        asyncio.create_task(run_web_research())
+        create_tracked_task(
+            run_web_research(),
+            task_name=f"web_research:{user_id}",
+        )
 
         answer = await run_in_threadpool(
             provider.generate_text,
@@ -464,10 +453,6 @@ async def send_chat_message(
             user_prompt=user_prompt,
             temperature=0.4,
         )
-
-        # Prepend meal command confirmation if applicable
-        if meal_command_response:
-            answer = f"{meal_command_response}\n\n{answer}"
 
         latency_ms = int((time.perf_counter() - start_time) * 1000)
         ai_log = await create_ai_log(
@@ -492,10 +477,6 @@ async def send_chat_message(
             "prompt_version": CHATBOT_PROMPT_VERSION,
         }
 
-        # Add meal extraction metadata if applicable
-        if meal_command_logged:
-            metadata["meal_command"] = True
-
         assistant_message = await save_chat_message(
             db=db,
             session_id=session_id,
@@ -506,37 +487,21 @@ async def send_chat_message(
         )
         session.last_activity_at = datetime.now(timezone.utc)
 
-        # Dispatch background tasks before commit — they receive primitive values, not db session
+        # ── OPTIMIZE-1 B3: Stale comment block removed ──────────────────────────────
+        # All extraction now flows through ExtractorAgent as the single authoritative
+        # pipeline. The following duplicate pipelines were permanently removed:
+        #   - _bg_passive_meal_extraction (AI-based)
+        #   - _bg_extract_insights (duplicate key_facts extraction)
+        #   - detect_meal_command() / process_meal_command() direct-write paths
+        #
+        # ExtractorAgent runs via _bg_extractor_agent below. It writes UserMemory
+        # via MemoryWriteEngine and generates UpdateProposals that require user
+        # confirmation before any MealLog write to the database.
+        #
+        # Dispatch background tasks before commit — they receive primitive values
         if background_tasks is not None:
-            # Passive meal extraction (only when no explicit meal command was used)
-            if not meal_command_logged:
-                background_tasks.add_task(
-                    _bg_passive_meal_extraction,
-                    user_id=user_id,
-                    user_message=user_content,
-                    ai_response=answer,
-                )
-            # Insight extraction — builds its own DB session
-            recent_for_insight = [
-                {"role": "user", "content": user_content},
-                {"role": "assistant", "content": answer},
-            ]
-            more_msgs_result = await db.execute(
-                select(ChatMessage)
-                .where(ChatMessage.session_id == session_id)
-                .order_by(ChatMessage.created_at.desc())
-                .limit(4)
-            )
-            more_msgs = list(reversed(more_msgs_result.scalars().all()))
-            for msg in more_msgs:
-                recent_for_insight.insert(0, {"role": msg.role, "content": msg.content})
-            background_tasks.add_task(
-                _bg_extract_insights,
-                user_id=user_id,
-                session_id=session_id,
-                recent_messages=recent_for_insight,
-            )
             # ExtractorAgent: runs after EVERY message to extract structured facts → UserMemory
+            # This is the ONLY extraction system. All other background tasks removed.
             background_tasks.add_task(
                 _bg_extractor_agent,
                 user_id=user_id,
@@ -571,69 +536,6 @@ async def send_chat_message(
 
 
 # ── Background task handlers (create own DB sessions) ─────────────────────────
-
-async def _bg_passive_meal_extraction(
-    user_id: UUID,
-    user_message: str,
-    ai_response: str,
-) -> None:
-    """
-    Background task: run passive meal extraction with its own DB session.
-    FastAPI BackgroundTasks guarantees task completion even if the client disconnects.
-    """
-    from app.db.session import AsyncSessionLocal
-
-    try:
-        async with AsyncSessionLocal() as db:
-            from app.services.meal_extraction_service import extract_meals_from_message
-
-            await extract_meals_from_message(
-                db=db,
-                user_id=user_id,
-                user_message=user_message,
-                ai_response=ai_response,
-            )
-            await db.commit()
-            logger.info(f"[BG] Passive meal extraction done for user {user_id}")
-    except Exception as e:
-        logger.error(f"[BG] Passive meal extraction failed for user {user_id}: {e}")
-
-
-async def _bg_extract_insights(
-    user_id: UUID,
-    session_id: UUID,
-    recent_messages: list[dict],
-) -> None:
-    """
-    Background task: extract and upsert conversation insights with its own DB session.
-    FastAPI BackgroundTasks guarantees task completion even if the client disconnects.
-    """
-    from app.db.session import AsyncSessionLocal
-
-    try:
-        async with AsyncSessionLocal() as db:
-            from app.services.conversation_insights_service import (
-                extract_insights_from_conversation,
-                upsert_conversation_insights,
-            )
-
-            insights_result = await extract_insights_from_conversation(
-                db=db,
-                user_id=user_id,
-                session_id=session_id,
-                recent_messages=recent_messages,
-            )
-            if insights_result.insights:
-                await upsert_conversation_insights(
-                    db=db,
-                    user_id=user_id,
-                    session_id=session_id,
-                    insights=insights_result.insights,
-                )
-            await db.commit()
-            logger.info(f"[BG] Insight extraction done for user {user_id} session {session_id}")
-    except Exception as e:
-        logger.error(f"[BG] Insight extraction failed for user {user_id} session {session_id}: {e}")
 
 
 async def _bg_extractor_agent(
@@ -785,11 +687,15 @@ async def process_streaming_message(
     session: ChatSession,
     user_content: str,
     user_id: UUID,
+    background_tasks: BackgroundTasks | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     Main entry point for streaming a chat message.
     Handles: hard-rule cards, normal AI streaming, AI-driven tool calls.
     Yields SSE strings.
+
+    OPTIMIZE-1 B1: BackgroundTasks parameter added so _bg_extractor_agent
+    dispatches here just like in the non-streaming path.
     """
     import asyncio
     import json
@@ -915,12 +821,25 @@ async def process_streaming_message(
 
     yield f"data: {json.dumps({'done': True, 'message_id': str(user_msg.id)})}\n\n"
 
+    # OPTIMIZE-1 B1: Dispatch _bg_extractor_agent in the streaming path too.
+    # Previously extraction only ran in the non-streaming path, causing the
+    # streaming API to miss all Text-to-Meal and key_facts extraction.
+    if background_tasks is not None:
+        background_tasks.add_task(
+            _bg_extractor_agent,
+            user_id=user_id,
+            session_id=session.id,
+            user_message=user_content,
+            ai_response=full_response,
+        )
+
 
 async def process_card_response_and_stream(
     db: AsyncSession,
     session: ChatSession,
     card_response: ChatCardResponse,
     user_id: UUID,
+    session_factory: async_sessionmaker | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     Handle a card response:
@@ -1002,60 +921,108 @@ async def process_card_response_and_stream(
     )
     user_prompt = build_chatbot_user_prompt(context)
 
+    # Close the original session before streaming begins.
+    # All subsequent DB writes use session_factory or a local session.
+    await db.close()
+
     client = AsyncGroq(api_key=settings.GROQ_API_KEY)
     full_response = ""
+    _stream_db = None
 
+    async def _get_stream_db():
+        nonlocal _stream_db
+        if _stream_db is None:
+            if session_factory is not None:
+                _stream_db = session_factory()
+            else:
+                from app.db.session import AsyncSessionLocal
+                _stream_db = AsyncSessionLocal()
+        return _stream_db
+
+    async def _close_stream_db():
+        nonlocal _stream_db
+        if _stream_db is not None:
+            # FIX-8 (C-2): Roll back uncommitted transaction before returning session
+            # to the pool. Handles the abnormal-disconnect case where the client
+            # aborts the SSE stream mid-transaction, leaving the session in a
+            # state that would poison the next borrow from the pool.
+            try:
+                if _stream_db.is_active:
+                    await _stream_db.rollback()
+            except Exception as e:
+                logger.error(
+                    "[DB-Cleanup-Race] Error rolling back session during abnormal disconnect: %s",
+                    e,
+                )
+            finally:
+                await _stream_db.close()
+                _stream_db = None
+
+    # FIX-8 (C-2): Outer try/finally ensures _close_stream_db() is called on
+    # EVERY exit path (timeout, JSON error, tool-call return, normal completion).
     try:
-        async with asyncio.timeout(60):
-            messages = [
-                {"role": "system", "content": CHATBOT_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ]
+        try:
+            async with asyncio.timeout(60):
+                messages = [
+                    {"role": "system", "content": CHATBOT_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ]
 
-            stream = await client.chat.completions.create(
-                model=settings.GROQ_TEXT_MODEL,
-                messages=messages,
-                tools=[ASK_USER_TOOL],
-                stream=True,
-                max_tokens=1024,
-                temperature=0.4,
-            )
+                stream = await client.chat.completions.create(
+                    model=settings.GROQ_TEXT_MODEL,
+                    messages=messages,
+                    tools=[ASK_USER_TOOL],
+                    stream=True,
+                    max_tokens=1024,
+                    temperature=0.4,
+                )
 
-            async for chunk in stream:
-                delta = chunk.choices[0].delta
+                async for chunk in stream:
+                    delta = chunk.choices[0].delta
 
-                # Handle tool call
-                if delta.tool_calls:
-                    for tc in delta.tool_calls:
-                        if tc.function.name == "ask_user":
-                            try:
-                                tool_input = json.loads(tc.function.arguments)
-                                new_card = _build_card_from_tool_input(tool_input)
-                                await save_card_message(db=db, session_id=session.id, card=new_card)
-                                await db.commit()
-                                yield f"event: card\ndata: {new_card.model_dump_json()}\n\n"
-                                return
-                            except (json.JSONDecodeError, KeyError):
-                                continue
+                    # Handle tool call
+                    if delta.tool_calls:
+                        for tc in delta.tool_calls:
+                            if tc.function.name == "ask_user":
+                                try:
+                                    tool_input = json.loads(tc.function.arguments)
+                                    new_card = _build_card_from_tool_input(tool_input)
+                                    s = await _get_stream_db()
+                                    await save_card_message(db=s, session_id=session.id, card=new_card)
+                                    await s.commit()
+                                    await _close_stream_db()
+                                    yield f"event: card\ndata: {new_card.model_dump_json()}\n\n"
+                                    return
+                                except (json.JSONDecodeError, KeyError):
+                                    # FIX-8 (C-2): JSON parse error on tool call — close session before returning
+                                    yield f"data: {json.dumps({'error': 'invalid_tool_input'})}\n\n"
+                                    return
 
-                content_delta = delta.content or ""
-                if content_delta:
-                    full_response += content_delta
-                    yield f"data: {json.dumps({'delta': content_delta})}\n\n"
+                    content_delta = delta.content or ""
+                    if content_delta:
+                        full_response += content_delta
+                        yield f"data: {json.dumps({'delta': content_delta})}\n\n"
 
-    except asyncio.TimeoutError:
-        yield f"data: {json.dumps({'error': 'timeout', 'detail': 'AI stream timed out after 60s'})}\n\n"
-        logger_stream.error("Card response stream timeout for session %s", session.id)
-        return
+        except asyncio.TimeoutError:
+            yield f"data: {json.dumps({'error': 'timeout', 'detail': 'AI stream timed out after 60s'})}\n\n"
+            logger_stream.error("Card response stream timeout for session %s", session.id)
+            return
 
-    # 6. Save final AI response
+    finally:
+        # FIX-8 (C-2): ALWAYS release the stream DB session.
+        # Covers: normal completion, timeout, tool-call return, JSON parse error, any exception.
+        await _close_stream_db()
+
+    # 6. Save final AI response using a fresh session
+    s = await _get_stream_db()
     await save_chat_message(
-        db=db,
+        db=s,
         session_id=session.id,
         role="assistant",
         content=full_response,
         metadata={"prompt_version": CHATBOT_PROMPT_VERSION, "resumed_from_card": True},
     )
-    await db.commit()
+    await s.commit()
+    await s.close()
 
     yield f"data: {json.dumps({'done': True, 'resumed_from_card': True})}\n\n"

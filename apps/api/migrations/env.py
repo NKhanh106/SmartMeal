@@ -30,17 +30,19 @@ def _get_sync_database_url() -> str:
     Alembic CLI runs synchronously — it does NOT need asyncpg.
     Must use a sync driver (psycopg2 or bare postgresql://).
 
-    Priority:
-      1. MIGRATION_DATABASE_URL  (dedicated sync URL, e.g. postgresql://... direct)
-      2. DATABASE_URL             (app async URL, converted to sync)
+    FIX-5 Priority (Direct connection only — never use PgBouncer):
+      1. MIGRATION_DATABASE_URL  — dedicated direct URL (recommended, set in .env)
+      2. DATABASE_URL            — direct connection, converted to sync driver
 
-    Supabase notes:
-      - Direct connection: port 5432 (no PgBouncer overhead)
-      - Pooled connection:  port 6543 (for app runtime only)
-      - SSL is mandatory
+    FIX-5 Supabase two-tier architecture:
+      - Direct (port 5432): Alembic migrations ONLY. Avoids PgBouncer DDL lock conflicts.
+      - Pooled (port 6543): FastAPI runtime ONLY. Uses ASYNC_DATABASE_POOL_URL.
+
+    SSL is mandatory for Supabase.
     """
-    # Dedicated sync URL for migrations (preferred)
-    raw_url = os.getenv("MIGRATION_DATABASE_URL") or os.getenv("DATABASE_URL", "")
+    # FIX-5: Read DATABASE_URL first — this is now the Direct connection (port 5432).
+    # MIGRATION_DATABASE_URL is optional override for CI/CD pipelines.
+    raw_url = os.getenv("DATABASE_URL", "") or os.getenv("MIGRATION_DATABASE_URL", "")
 
     # Convert async driver to sync for alembic
     url = raw_url.replace("postgresql+asyncpg://", "postgresql://")

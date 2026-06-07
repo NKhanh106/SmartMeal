@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useChatBot } from "@/hooks/use-chatbot";
+import { useChatBot, type DepthMode } from "@/hooks/use-chatbot";
 import { ChatBubble } from "./ChatBubble";
 import { ChatPanel } from "./ChatPanel";
 
@@ -18,6 +18,8 @@ export function FloatingChatBot() {
     staleWarning,
     pendingCard,
     isCardLoading,
+    depth,
+    setDepth,
     setInputValue,
     openChat,
     closeChat,
@@ -33,13 +35,17 @@ export function FloatingChatBot() {
     retryLastMessage,
     submitCardResponse,
     skipCard,
+    pendingProposals,
+    proposalLoading,
+    confirmProposal,
+    rejectProposal,
   } = useChatBot();
 
   const [showSidebar, setShowSidebar] = useState(false);
 
   const handleSend = () => {
     if (inputValue.trim()) {
-      sendMessageStream(inputValue);
+      sendMessageStream(inputValue, depth);
     }
   };
 
@@ -61,6 +67,8 @@ export function FloatingChatBot() {
         isCardLoading={isCardLoading}
         onInputChange={setInputValue}
         onSend={handleSend}
+        onDepthChange={setDepth}
+        depth={depth}
         onMinimize={closeChat}
         onToggleSidebar={() => setShowSidebar((prev) => !prev)}
         onSelectSession={(session) => {
@@ -77,6 +85,10 @@ export function FloatingChatBot() {
         onRetry={retryLastMessage}
         onSubmitCard={submitCardResponse}
         onSkipCard={skipCard}
+        pendingProposals={pendingProposals}
+        proposalLoading={proposalLoading}
+        onConfirmProposal={confirmProposal}
+        onRejectProposal={rejectProposal}
       />
     </>
   );

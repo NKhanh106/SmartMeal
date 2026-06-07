@@ -3,6 +3,7 @@ import asyncio
 from unittest.mock import AsyncMock, patch, MagicMock
 from app.agents.multi_agent_orchestrator import MultiAgentOrchestrator
 from app.agents.base import AgentResult
+from app.agents.context_loader import FullUserContext
 
 
 def _async_gen(items):
@@ -36,20 +37,28 @@ async def test_extractor_runs_as_background_task(orchestrator, mock_user):
 
     with patch("app.agents.multi_agent_orchestrator.get_or_create_memory",
                new_callable=AsyncMock, return_value=memory_mock):
-        with patch.object(orchestrator, "_get_user_profile", new_callable=AsyncMock, return_value=None):
-            with patch.object(orchestrator, "_get_recent_messages", new_callable=AsyncMock, return_value=[]):
-                with patch.object(orchestrator, "_mark_needs_extraction", new_callable=AsyncMock):
-                    with patch("asyncio.create_task") as mock_task:
-                        with patch.object(orchestrator, "_stream_final_response",
-                                          return_value=_async_gen(["data: OK\n\n"])):
-                            chunks = []
-                            async for chunk in orchestrator.process(
-                                "안녕", "session-1", mock_user, AsyncMock()
-                            ):
-                                chunks.append(chunk)
+        with patch("app.agents.multi_agent_orchestrator.load_full_user_context",
+                   new_callable=AsyncMock, return_value=FullUserContext(user_id=1)):
+            with patch.object(orchestrator, "_get_user_profile",
+                              new_callable=AsyncMock, return_value=None):
+                with patch.object(orchestrator, "_get_active_goal",
+                                  new_callable=AsyncMock, return_value=None):
+                    with patch.object(orchestrator, "_get_recent_messages",
+                                      new_callable=AsyncMock, return_value=[]):
+                        with patch.object(orchestrator, "_mark_needs_extraction",
+                                          new_callable=AsyncMock):
+                            with patch("asyncio.create_task") as mock_task:
+                                with patch.object(
+                                    orchestrator, "_stream_final_response",
+                                    return_value=_async_gen(["data: OK\n\n"])
+                                ):
+                                    chunks = []
+                                    async for chunk in orchestrator.process(
+                                        "Hello", "session-1", mock_user, AsyncMock(), MagicMock()
+                                    ):
+                                        chunks.append(chunk)
 
-                            # create_task must have been called (fire-and-forget)
-                            mock_task.assert_called()
+                                    mock_task.assert_called()
 
 
 @pytest.mark.asyncio
@@ -68,25 +77,27 @@ async def test_single_agent_failure_does_not_break_response(orchestrator, mock_u
 
         with patch("app.agents.multi_agent_orchestrator.get_or_create_memory",
                    new_callable=AsyncMock, return_value=memory_mock):
-            with patch.object(orchestrator, "_get_user_profile",
-                              new_callable=AsyncMock, return_value=None):
-                with patch.object(orchestrator, "_get_recent_messages",
-                                  new_callable=AsyncMock, return_value=[]):
-                    with patch.object(orchestrator, "_mark_needs_extraction",
-                                      new_callable=AsyncMock):
-                        with patch("asyncio.create_task"):
-                            with patch.object(
-                                orchestrator, "_stream_final_response",
-                                return_value=_async_gen(["data: OK\n\n"])
-                            ):
-                                # Should NOT raise — orchestrator catches agent failures
-                                chunks = []
-                                async for chunk in orchestrator.process(
-                                    "tôi nên ăn gì", "session-1", mock_user, AsyncMock()
-                                ):
-                                    chunks.append(chunk)
-                                # Fallback response is produced
-                                assert len(chunks) > 0
+            with patch("app.agents.multi_agent_orchestrator.load_full_user_context",
+                       new_callable=AsyncMock, return_value=FullUserContext(user_id=1)):
+                with patch.object(orchestrator, "_get_user_profile",
+                                  new_callable=AsyncMock, return_value=None):
+                    with patch.object(orchestrator, "_get_active_goal",
+                                      new_callable=AsyncMock, return_value=None):
+                        with patch.object(orchestrator, "_get_recent_messages",
+                                          new_callable=AsyncMock, return_value=[]):
+                            with patch.object(orchestrator, "_mark_needs_extraction",
+                                              new_callable=AsyncMock):
+                                with patch("asyncio.create_task"):
+                                    with patch.object(
+                                        orchestrator, "_stream_final_response",
+                                        return_value=_async_gen(["data: OK\n\n"])
+                                    ):
+                                        chunks = []
+                                        async for chunk in orchestrator.process(
+                                            "toi nen an gi", "session-1", mock_user, AsyncMock(), MagicMock()
+                                        ):
+                                            chunks.append(chunk)
+                                        assert len(chunks) > 0
 
 
 def test_nutrition_keywords_trigger_nutrition_advisor(orchestrator):
@@ -98,7 +109,7 @@ def test_nutrition_keywords_trigger_nutrition_advisor(orchestrator):
 def test_health_keywords_trigger_health_monitor(orchestrator):
     memory = MagicMock()
     memory.health_events = []
-    assert orchestrator._needs_health_check("tôi bị đau đầu", memory) is True
+    assert orchestrator._needs_health_check("tôi bị đau bụng", memory) is True
     assert orchestrator._needs_health_check("hôm nay tôi ổn", memory) is False
 
 
@@ -116,13 +127,10 @@ async def test_parallel_execution_not_sequential(orchestrator, mock_user):
 
     message = "tôi mệt và muốn tập gym ăn gì"
 
-    # This message triggers: health ("mệt"), nutrition (food keywords),
-    # and fitness (workout keywords) — all run in Phase 2
     assert orchestrator._needs_health_check(message, memory_mock) is True
     assert orchestrator._needs_nutrition_advice(message) is True
     assert orchestrator._needs_fitness_advice(message) is True
 
-    # A simple weather message — no health issues in memory, no health keywords
     simple_msg = "thời tiết hôm nay thế nào"
     memory_mock.health_events = []
     assert orchestrator._needs_health_check(simple_msg, memory_mock) is False

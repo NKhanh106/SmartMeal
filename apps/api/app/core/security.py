@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any, Union
+from uuid import uuid4
 
 from jose import jwt
 from passlib.context import CryptContext
@@ -26,9 +27,9 @@ def create_access_token(
 
 
 def create_refresh_token(subject: Union[str, Any]) -> str:
-    """Create a refresh token valid for 7 days."""
+    """Create a refresh token valid for 7 days. Includes a unique jti for atomic rotation."""
     expire = datetime.now(timezone.utc) + timedelta(days=7)
-    to_encode = {"exp": expire, "sub": str(subject), "type": "refresh"}
+    to_encode = {"exp": expire, "sub": str(subject), "type": "refresh", "jti": str(uuid4())}
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
 
 

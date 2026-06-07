@@ -19,6 +19,7 @@ from app.services.progress_log_service import (
     get_user_progress_logs,
     update_progress_log,
 )
+from app.services.daily_recommendation_service import invalidate_user_plan_cache
 
 router = APIRouter(prefix="/progress-logs", tags=["Progress Logs"])
 
@@ -43,6 +44,7 @@ async def create_progress_log(
         note=payload.note,
     )
     await db.commit()
+    await invalidate_user_plan_cache(current_user.id)
     await db.refresh(record)
     return record
 
@@ -118,6 +120,7 @@ async def update_my_progress_log(
         **payload.model_dump(exclude_unset=True),
     )
     await db.commit()
+    await invalidate_user_plan_cache(current_user.id)
     await db.refresh(record)
     return record
 
@@ -134,4 +137,5 @@ async def delete_my_progress_log(
         user_id=current_user.id,
     )
     await db.commit()
+    await invalidate_user_plan_cache(current_user.id)
     return None

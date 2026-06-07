@@ -144,10 +144,24 @@ async def recalculate_meal_totals(db: AsyncSession, meal_log_id):
             detail="Meal log not found.",
         )
 
-    meal_log.total_calories = float(round_decimal(sum(Decimal(str(item.calories)) for item in items)))
-    meal_log.total_protein_g = float(round_decimal(sum(Decimal(str(item.protein_g)) for item in items)))
-    meal_log.total_carb_g = float(round_decimal(sum(Decimal(str(item.carb_g)) for item in items)))
-    meal_log.total_fat_g = float(round_decimal(sum(Decimal(str(item.fat_g)) for item in items)))
+    # Clamp negative values to zero — a meal cannot have negative calories/nutrients.
+    # D-5 fix: prevents negative totals from malicious MealItem edits.
+    neg_warn = []
+    for item in items:
+        for field, val in [("calories", item.calories), ("protein_g", item.protein_g),
+                           ("carb_g", item.carb_g), ("fat_g", item.fat_g)]:
+            if val is not None and float(val) < 0:
+                neg_warn.append(f"{field}={val} on item {item.id}")
+
+    total_cal = float(round_decimal(sum(Decimal(str(item.calories)) for item in items)))
+    total_prot = float(round_decimal(sum(Decimal(str(item.protein_g)) for item in items)))
+    total_carb = float(round_decimal(sum(Decimal(str(item.carb_g)) for item in items)))
+    total_fat = float(round_decimal(sum(Decimal(str(item.fat_g)) for item in items)))
+
+    meal_log.total_calories = max(total_cal, 0.0)
+    meal_log.total_protein_g = max(total_prot, 0.0)
+    meal_log.total_carb_g = max(total_carb, 0.0)
+    meal_log.total_fat_g = max(total_fat, 0.0)
 
     await db.flush()
     return meal_log

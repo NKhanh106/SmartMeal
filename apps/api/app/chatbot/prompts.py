@@ -1,5 +1,7 @@
 CHATBOT_PROMPT_VERSION = "chatbot_v1"
 
+import json
+
 CHATBOT_SYSTEM_PROMPT = """
 Bạn là AI Coach của SmartMeal — hỗ trợ dinh dưỡng và luyện tập cá nhân hóa.
 
@@ -27,10 +29,21 @@ Tối đa 1 card mỗi phản hồi. Khi dùng → viết 1 câu ngắn rồi g�
 
 
 def build_chatbot_user_prompt(context: dict) -> str:
+    """
+    FIX-7 (V-2): JSON-encode the context dict so that any residual injection
+    payloads surviving sanitize_for_prompt (e.g. a "[filtered]" replacement string
+    containing adversarial text) are escaped inside a JSON string literal and
+    cannot break out of the template.
+
+    The AI receives the context as a JSON string, which is unambiguous regardless
+    of what characters are embedded in field values.
+    """
+    # indent=None → compact; ensure_ascii=False → preserves Vietnamese diacritics
+    context_json = json.dumps(context, indent=None, ensure_ascii=False)
     return f"""Dưới đây là context cá nhân hóa của người dùng trong hệ thống SmartMeal.
 
 Context:
-{context}
+{context_json}
 
 Hãy trả lời câu hỏi của người dùng dựa trên context trên.
 """

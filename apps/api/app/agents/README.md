@@ -1,237 +1,163 @@
-# Multi-Agent AI System
+# `app/agents/` — Multi-Agent System
 
-The core intelligence layer of SmartMeal. A pipeline of specialist AI agents that collaborate to produce personalized, health-aware recommendations.
+## Module Overview & Domain Boundaries
 
-## System Overview
+This folder houses the entire multi-agent intelligence layer of SmartMeal's 2-Phase chatbot pipeline. It governs:
+
+- **Phase 1 — Extraction & Safety Gate**: `ExtractorAgent` silently extracts structured facts from every user message → `UserMemory`; `HealthMonitorAgent` performs urgent-keyword triage and health-state assessment before any specialist response is emitted.
+- **Phase 2 — Specialist Advisory**: `NutritionAdvisorAgent`, `FitnessCoachAgent`, and `WebResearcherAgent` each generate domain-specific recommendations in parallel.
+- **Orchestration**: `MultiAgentOrchestrator` routes requests, manages phase ordering, enforces depth-mode token budgets, and synthesises final responses.
+- **Shared Infrastructure**: `BaseAgent` provides all agents with AI calls, retry logic, circuit-breaker integration, and `AgentRun` audit logging.
+- **Memory Authority**: `memory_service` enforces field-level write ownership; `data_writers` translates user-confirmed `UpdateProposal`s into atomic DB writes.
+- **Safety**: `safety_matrix` provides cross-agent injury-exercise guardrails; `output_guardrails` applies deterministic post-processing (medical disclaimers, prohibited-phrase filtering).
+
+---
+
+## File Registry & Critical Path Map
+
+| File Path | Authoritative Component / Class | Inbound Dependencies | Core Technical Responsibility |
+|---|---|---|---|
+| `__init__.py` | Module re-exports | — | Exposes `AgentContext`, `AgentResult`, `BaseAgent`; `get_all_agents()`, `get_trigger_helpers()` |
+| `base.py` | Backwards-compatible re-export | `base_agent.py` | Thin compat shim — forwards imports to `base_agent` |
+| `base_agent.py` | `BaseAgent`, `AgentContext`, `AgentResult`, `AI_TIMEOUT_SECONDS=30` | `groq`, `tenacity`, `circuit_breaker`, `AgentRun` | Abstract agent base with AI call, retry (3-attempt exponential backoff), circuit-breaker, token tracking, `_log_start/_log_complete` for `AgentRun` audit rows |
+| `context_loader.py` | `load_full_user_context()`, `FullUserContext`, `NutritionSnapshot`, `BodySnapshotData`, `FitnessSnapshotData` | SQLAlchemy `selectinload` eager loading | Single-query (6-relation `selectinload`) data loader for all agents; aggregates 7-day meal logs; computes `kcal_gap_today`, `kcal_adherence_7d`, weight trend; computes `profile_completeness` score |
+| `data_writers.py` | `execute_confirmed_update()`, `DataWriteResult`, 9 writer functions | `UpdateProposal` schema, `MemoryWriteEngine`, `meal_service` | Translates user-confirmed proposals to DB writes; enforces biomedical floor/ceiling validation (D-2/D-3/A-5); calls `invalidate_user_plan_cache()` after every write |
+| `depth_config.py` | `DepthConfig`, `DEPTH_CONFIGS`, `get_depth_config()`, `ResponseDepth` enum | — | Three depth tiers: `QUICK` (extractor only, 400 tokens), `DEEP` (4 agents, 500–700 tokens), `EXPERT` (5 agents, 800 tokens) with explicit timeout budgets per phase |
+| `extractor_agent.py` | `ExtractorAgent` | `AgentContext`, `memory_service`, `proposal_builder`, `ConversationInsight` | Post-every-message extraction; `memory_write_engine` path; writes `ConversationInsight` records; session-summary at msg-count ≥ 5; triggers `_mark_session_extracted` |
+| `fitness_coach_agent.py` | `FitnessCoachAgent` | `SafetyMatrix`, `get_memory_context_for_agent`, `output_guardrails` | Injury-safety gate (`apply_safety_overrides`) before LLM; forced `rest`/`light_activity` overrides for illness severity; regex substring block matching for exercise names |
+| `health_monitor_agent.py` | `HealthMonitorAgent` | URGENT_KEYWORDS, NEGATION_PATTERNS, `_is_negated`, `_is_third_person_report` | Rule-based urgent triage (8 keyword phrases) + negation + third-person filtering; `ASSESSMENT_SCHEMA` JSON output; `_resolve_matching_health_events` recovery auto-resolution |
+| `memory_service.py` | `MemoryWriteEngine`, `apply_memory_updates()`, `apply_memory_updates_with_retry()`, `MEMORY_OWNERSHIP` | `UserMemory` model, optimistic lock (extraction_version), Redis queue | Field ownership map (Phase 1 HARD rule: each field has exactly 1 canonical writer); `get_or_create_memory` uses `SELECT FOR UPDATE`; retry with ±30% jitter backoff |
+| `multi_agent_orchestrator.py` | `MultiAgentOrchestrator`, `_make_health_fallback()` | All agents, `groq_circuit`, `load_full_user_context`, `MemoryWriteEngine`, `depth_config` | Keyword-based routing; Phase 1 `HealthMonitor` always runs first; Redis extractor queue (`LPUSH`/drain); anti-loop clarification tracking (3 Redis keys per session); SSE event types: `depth`, `card`, `update_proposal`, `delta`, `done` |
+| `nutrition_advisor_agent.py` | `NutritionAdvisorAgent` | `calculate_macro_targets`, `VAGUE_NUTRITION_PATTERNS`, `BEHAVIORAL_EATING_PATTERNS` | Two-path AI schema (direct advice vs clarification card); Mode B behavioral eating classifier (6 categories, 12 objective-reason suppressors); `MODE_A_TOOL`: `Mifflin-St Jeor` injection before LLM prompt; allergen verification filter |
+| `output_guardrails.py` | `append_medical_disclaimer()`, `filter_prohibited_phrases()`, `PROHIBITED_PHRASES` | — | Deterministic out-of-band enforcement; C-1: medical disclaimers per domain; C-3: 20 judgmental-phrase replacements |
+| `proposal_builder.py` | `build_proposals_from_extraction()` | `UpdateProposal`, `UpdateTarget`, `FullUserContext` | Converts AI extraction dict → `UpdateProposal` list; `confidence ≥ 0.7` gate; meal-type inference by hour-of-day |
+| `prompt_builder.py` | `build_health_monitor_context()`, `build_nutrition_advisor_context()`, `build_fitness_coach_context()`, `build_orchestrator_summary()` | `FullUserContext` dataclasses | Per-agent context string builders; 12 adherence-ratio thresholds; CONDITION_RULES mapping; injury-safety rule string builders |
+| `safety_matrix.py` | `SafetyMatrix`, `apply_safety_overrides()`, `_REGION_MATRIX` | `_CLEARANCE_TO_REGION` | 6 body-region matrices (back, shoulder, knee, wrist, hip, cardio-limited); 4-tier severity check with mitigating-qualifier suppression; `forced_workout_type` propagation |
+| `web_researcher_agent.py` | `WebResearcherAgent` | `TavilyClient`, `groq_circuit`, rate-limit helpers | Tavily-first, AI-synthesis fallback; 3 searches/day/user rate limit via `AgentRun` count; 15-domain trusted-source whitelist; `SOURCE_QUALITY` tier metadata; SHA256 cache key (daily, per-user) |
+
+---
+
+## Local Invariants & Production Logic Rules
+
+### Phase 1 / Phase 2 Separation
+- **Phase 1** (`HealthMonitor`): Runs in the initial `AsyncSession` **before** `db.close()`. Its writes commit atomically with the session.
+- **Phase 2** (`NutritionAdvisor`, `FitnessCoach`, `WebResearcher`): Each runs in an **isolated session** from `session_factory` inside `asyncio.Task`. All Phase 2 writes are routed through **one** `MemoryWriteEngine` instance committed after all agents complete.
+- **ExtractorAgent**: Runs via Redis queue (`LPUSH`/BRPOP) **after** the HTTP response commits. Proposals are drained via SSE after the final AI response.
+
+### Memory Field Ownership (Phase 1 HARD Rule)
+```
+body_snapshot         → health_monitor    conversation_summary → extractor
+health_events        → health_monitor    recent_meals         → extractor
+nutrition_memory      → nutrition_advisor  key_facts           → extractor
+fitness_memory        → fitness_coach
+```
+Unauthorized writes are **BLOCKED** (hard, not silently dropped). SUPER_AGENTS (`orchestrator`, `data_writer`, `None`) bypass all checks.
+
+### Safety Matrix Rules
+| Region | Blocked | Alternatives |
+|---|---|---|
+| back / lower_back / spine | Barbell Squat, Deadlift, Overhead Press, Bent Over Row, Jump Squat | Leg Press, Leg Extension, Romanian Deadlift |
+| shoulder / shoulders | Bench Press, Plank, Push-up, Shoulder Press, Burpee | Incline DB Press, Knee Push-up, Lateral Raise |
+| knee / knees | Jump Squat, Burpee, Lunge, Box Jump, Running | Goblet Squat, Leg Press, Cycling, Swimming |
+| wrist | Push-up, Plank, Bench Press | Wall Push-up, DB Press, Machine Chest Press |
+| hip | Deadlift, Lunge, Hip Thrust (heavy) | Bodyweight Hip Thrust, Glute Bridge, Clamshell |
+| cardio_limited / illness | Running, HIIT, Burpee | Walking, Stretching, Diaphragmatic breathing |
+
+### Biomedical Validation Floor/Ceiling (data_writers)
+| Field | Floor | Ceiling |
+|---|---|---|
+| Body weight | 20.0 kg | 300.0 kg |
+| Daily calories | 1,000 kcal | 6,000 kcal |
+| Protein | — | 300 g |
+| Fat | — | 200 g |
+| Carbohydrate | — | 1,500 g (carb target) |
+| Hydration | 500 ml | 10,000 ml |
+
+### Behavioral Eating Pattern Detection (NutritionAdvisor)
+Six categories with objective-reason suppression keywords: `bận`, `bận học`, `họp`, `bệnh`, `thỉnh thoảng`, etc. — prevents false positives from scheduling/health mentions.
+
+### Depth Mode Token Budgets
+| Mode | Extractor | Health | Nutrition | Fitness | WebResearch | Final |
+|---|---|---|---|---|---|---|
+| QUICK | 400 | 0 | 0 | 0 | 0 | 400 |
+| DEEP | 600 | 500 | 600 | 500 | 0 | 700 |
+| EXPERT | 800 | 800 | 800 | 800 | 800 | 1,200 |
+
+---
+
+## Intra-Module Request Flow
+
+### Full Depth Request Lifecycle (DEEP/EXPERT)
 
 ```
-User Message
-     │
-     ▼
-┌─────────────────────────────────────────────────────────┐
-│           MultiAgentOrchestrator                        │
-│                                                      │
-│  1. Sanitize input (prompt injection prevention)     │
-│  2. Load UserMemory + Profile                        │
-│  3. Fire Extractor (background, fire-and-forget)     │
-│                                                      │
-│  Phase 1 (sequential — others DEPEND on this):        │
-│    HealthMonitor ──────────────────────────────────────┐
-│                                                     ↓  │
-│  Phase 2 (parallel):                            context │
-│    NutritionAdvisor ◄──────────────────────────────┘   │
-│    FitnessCoach    ◄──────────────────────────────┘   │
-│    WebResearcher (optional, triggered by keywords)      │
-│                                                      │
-│  4. Check for clarification cards (priority-sorted)    │
-│  5. Build synthesis context                           │
-│  6. Final AI response (streamed via SSE)               │
-└─────────────────────────────────────────────────────┘
+HTTP Request
+    │
+    ▼
+MultiAgentOrchestrator.process()
+    │
+    ├─► sanitize_for_prompt(message)          ← Input sanitisation
+    │
+    ├─► load_full_user_context()               ← Single eager query (6 relations)
+    │       Returns FullUserContext dataclass
+    │
+    ├─► extractor_enqueue(LPUSH to Redis)      ← Deferred extraction queue
+    │
+    ├─► AgentContext + depth_config built
+    │
+    ├─► [PHASE 1] HealthMonitorAgent.run()
+    │       └─► _is_negated() / _is_third_person_report()   ← Urgent keyword gate
+    │       └─► Groq AI → ASSESSMENT_SCHEMA JSON
+    │       └─► _build_memory_updates()
+    │       └─► apply_memory_updates(agent_name="health_monitor")
+    │       └─► AgentRun.status="completed" logged
+    │       db.close()
+    │
+    ├─► [PHASE 2] asyncio.wait([Task])
+    │       │
+    │       ├─► NutritionAdvisorAgent.run()  ──► Groq AI (Mode A/B schema)
+    │       │                                  ├─► calculate_macro_targets() [Mode A]
+    │       │                                  ├─► classify_behavioral_pattern() [Mode B]
+    │       │                                  └─► MemoryWriteEngine.apply()
+    │       │
+    │       ├─► FitnessCoachAgent.run()    ──► Groq AI + SafetyMatrix overrides
+    │       │                                  └─► MemoryWriteEngine.apply()
+    │       │
+    │       └─► WebResearcherAgent.run() ──► Tavily search OR AI synthesis
+    │                                          ├─► _filter_trusted_sources() (15 domains)
+    │                                          └─► cache_set() (24h TTL)
+    │
+    ├─► MemoryWriteEngine.commit()             ← Single atomic Phase 2 write
+    │
+    ├─► _get_highest_priority_card()           ← Priority 1/2/3/5 check
+    │
+    ├─► _stream_final_response()              ← Groq streaming + save ChatMessage
+    │
+    └─► extractor_drain_proposals(SCAN pipeline) ← Proposals via SSE
 ```
 
-## Why Two Phases?
-
-NutritionAdvisor and FitnessCoach DEPEND on HealthMonitor output. HealthMonitor's output includes:
-
-- `fitness_clearance`: list of exercises the user is cleared for, and a list to avoid
-- `nutritional_needs.avoid`: foods to avoid today based on current health state
-- `active_issues`: current health concerns that affect recommendations
-
-If NutritionAdvisor or FitnessCoach ran before HealthMonitor completed, they might suggest foods or exercises that are contraindicated. Running HealthMonitor first ensures all subsequent recommendations are health-aware. This is a safety constraint, not a performance choice.
-
-## Agents
-
-### Agent 1: Extractor (`extractor_agent.py`)
-
-**Role:** Silent data harvester — runs after every message.
-
-**Trigger:** Every user message, fire-and-forget background task.
-
-**Why background:** Must not block the SSE response stream. The user should receive AI text immediately without waiting for data extraction.
-
-The extractor reads the user's message and conversation history to update the user's long-term memory. It is purely observational — it does not respond to the user.
-
-What it extracts:
-
-| Data | Destination | Merge Strategy |
-|------|------------|----------------|
-| Meals mentioned ("sáng nay ăn bánh mì") | `nutrition_memory.recent_meals` | Prepend + dedup by date+meal_type, max 30 |
-| Body state ("mệt", "đau bụng") | `body_snapshot` | Deep-merge, additive for sore_areas |
-| Health events ("bị tiêu chảy", "hết sốt rồi") | `health_events` | Prepend new, cap at 50 (newest first) |
-| Stable facts ("tôi dị ứng hải sản") | `key_facts` | Upsert by exact text match |
-| Fitness data ("hôm nay tập gym xong đau lưng") | `fitness_memory` | Deep-merge |
-
-Severity mapping for body state:
-- Vietnamese intensity words → numeric severity:
-  - `hơi`, `nhẹ` → `mild`
-  - `khá`, `vừa` → `moderate`
-  - `rất`, `nặng` → `severe`
-
-Conversation summary: rolling 800-token max, updated every 5+ messages. Maintains a concise gist of the conversation for context in future sessions.
-
-### Agent 2: Health Monitor (`health_monitor_agent.py`)
-
-**Role:** Medical-aware wellness assessor.
-
-**Trigger:** Health keywords detected in message OR unresolved health events in user memory.
-
-**Runs:** Phase 1 (sequential — must complete before Phase 2).
-
-Key implementation details:
-
-- **Rule-based urgent keyword check runs BEFORE the AI call.** Keywords like "đau ngực", "khó thở", "chóng mặt dữ dội" trigger urgent warnings immediately, without waiting for the AI model. This is a safety override.
-- **Negation detection:** "không bị đau ngực" does NOT trigger the urgent warning. The sentence structure is checked.
-- **Output structure:** The agent returns `fitness_clearance` (exercises to do/avoid), `nutritional_needs` (dietary adjustments), and `active_issues` (current concerns).
-
-Output consumed by:
-- `FitnessCoach`: reads `fitness_clearance` before any exercise recommendation
-- `NutritionAdvisor`: reads `nutritional_needs.avoid` to filter suggestions
-- `Orchestrator`: includes health status in synthesis context
-
-### Agent 3: Nutrition Advisor (`nutrition_advisor_agent.py`)
-
-**Role:** Certified nutritionist + Vietnamese cuisine expert.
-
-**Trigger:** Nutrition/meal keywords in message ("ăn", "uống", "protein", "bữa sáng", etc.).
-
-**Runs:** Phase 2 (parallel with FitnessCoach, after HealthMonitor).
-
-Key implementation details:
-
-- **Hard constraints:** Profile allergies and dietary restrictions are NEVER suggested. These are hard constraints that the AI must follow — no exceptions.
-- **Soft constraints:** HealthMonitor's `nutritional_needs.avoid` items are de-prioritized today but not forbidden.
-- **Post-processing safety check:** After the AI generates food suggestions, the code verifies none of the suggested foods contain allergens from the user's profile. If a conflict is found, that suggestion is removed.
-- **Fallback:** If all suggestions are filtered (all foods have a conflict), the agent generates a safe generic meal ("canh rau mồng tơi với cơm trắng") that avoids all known allergens.
-- **Deduplication:** Skips foods logged in `recent_meals` for the same date and meal_type. The user doesn't want to be told to eat the same thing twice in one day.
-
-### Agent 4: Fitness Coach (`fitness_coach_agent.py`)
-
-**Role:** Adaptive personal trainer with sports medicine knowledge.
-
-**Trigger:** Fitness/workout keywords in message ("tập", "gym", "cardio", "yoga", "chạy bộ", etc.).
-
-**Runs:** Phase 2 (parallel with NutritionAdvisor, after HealthMonitor).
-
-Key implementation details:
-
-- **MUST check `health_monitor.fitness_clearance` before any recommendation.** This is enforced by the orchestrator passing the clearance data in the agent's context.
-- **Illness override:** If the user's health status is moderate or severe illness, the workout type is forced to `"rest"` and the exercises array is cleared. The AI recommends rest, stretching, or walking only.
-- **Sore area detection:** If `body_snapshot.sore_areas` contains a body part, all exercises targeting that area are excluded. The agent suggests the antagonist muscle group instead (e.g., sore chest → suggest back exercises).
-- **Safety override happens AFTER the AI call.** The AI proposes exercises, then the safety layer validates them against fitness_clearance. Any violations are removed or replaced.
-
-### Agent 5: Web Researcher (`web_researcher_agent.py`)
-
-**Role:** Evidence-based fact checker.
-
-**Trigger:** Research keywords ("mới nhất", "nghiên cứu", "khoa học", "so sánh", "bằng chứng").
-
-**Runs:** Phase 2 (optional, parallel with other agents).
-
-Key implementation details:
-
-- **Rate limited:** 3 searches per user per day, tracked in the `agent_runs` table.
-- **Cache:** Results are cached per-user + per-query + per-day using a SHA256 hash of the query. Cached results are returned immediately without a web search.
-- **Trusted sources:** Only 13 domains are allowed, including pubmed.gov, vinmec.com, healthline.com, who.int, nih.gov, and vietnamese health portals. All other domains are excluded.
-- **Sanitization:** Web findings are sanitized before being injected into the synthesis context to prevent prompt injection via cached search results.
-
-## UserMemory — The Agent Brain
-
-The `UserMemory` model stores all persistent context about a user in PostgreSQL JSONB columns. One row per user.
+### Extraction Queue Path (POST-commit)
 
 ```
-user_memory
-├── body_snapshot     Current physical state
-│     ├── weight, energy_level, sleep_last_night
-│     ├── digestion_status, muscle_status
-│     └── sore_areas[], injury_areas[]
-│
-├── health_events[]  Append-only health log (max 50)
-│     ├── event, severity, notes, resolved, extracted_at
-│
-├── nutrition_memory Eating patterns and restrictions
-│     ├── recent_meals[]     last 30, dedup by date+meal_type
-│     ├── foods_to_avoid[]  confirmed bad reactions
-│     └── common_deficiencies[]
-│
-├── fitness_memory   Workout history and restrictions
-│     ├── recent_workouts[], injury_history[]
-│     └── preferences
-│
-├── key_facts[]      Stable personal facts (upserted by text)
-│     └── fact, confidence, extracted_at
-│
-└── conversation_summary  Rolling 800-token session summary
+extractor_queue_worker_loop()  ──► BRPOP (blocking)
+    │
+    ├─► ExtractorAgent.run()
+    │       ├─► _build_extraction_context(last 2 turns)
+    │       ├─► Groq AI → EXTRACTION_SCHEMA JSON
+    │       ├─► build_proposals_from_extraction()
+    │       ├─► MemoryWriteEngine.apply("extractor", ...)
+    │       ├─► extractor_enqueue_proposal()      ← Redis SETEX 600s
+    │       └─► upsert_conversation_insights()
+    │
+    └─► db.commit()
 ```
 
-## Memory Merge Strategy
+---
 
-Each field has a specific merge strategy:
+## Key Implementation Notes
 
-| Field | Strategy | Why |
-|-------|----------|-----|
-| `body_snapshot` | Deep-merge | Preserves unrelated fields while updating specific ones |
-| `sore_areas` | Additive union | Never removes soreness that the user reported — only adds |
-| `health_events` | Prepend + cap at 50 | Newest events first; oldest pruned when full |
-| `key_facts` | Upsert by exact text | Same fact ("dị ứng đậu phộng") updates confidence, doesn't duplicate |
-| `recent_meals` | Prepend + dedup at 30 | Most recent first; no duplicate meal_type on same date |
-| `nutrition_memory` | Deep-merge per sub-field | Per-field merge avoids overwriting unrelated data |
-| `conversation_summary` | Replace if longer | Only update when there's new content to add |
-
-## Orchestrator Synthesis
-
-The `_build_synthesis_context` method assembles all agent outputs into a structured string injected into the final AI system prompt:
-
-```
-[HEALTH STATE]        ← from HealthMonitor
-[NUTRITION GUIDANCE]  ← from NutritionAdvisor
-[FITNESS GUIDANCE]    ← from FitnessCoach
-[USER MEMORY]         ← body_snapshot, recent_meals, active issues
-[DIETARY CONSTRAINTS] ← from profile + health conditions
-```
-
-This synthesis is then passed to `_stream_final_response`, which calls the AI model. The AI responds conversationally — it never exposes agent names or internal technical details to the user.
-
-## Performance Characteristics
-
-| Agent | Avg Latency | Max Tokens | Trigger Rate |
-|-------|------------|------------|--------------|
-| Extractor | ~800ms | 800 | 100% (background) |
-| Health Monitor | ~1200ms | 800 | ~28% |
-| Nutrition Advisor | ~1100ms | 800 | ~45% |
-| Fitness Coach | ~950ms | 800 | ~18% |
-| Web Researcher | ~3400ms | 800 | ~9% |
-| Total (Phase 1+2) | ~2000ms | — | — |
-
-Latency figures are estimates based on Groq API response times. Actual performance depends on network conditions and API load.
-
-## Adding a New Agent
-
-1. Create `apps/api/app/agents/your_agent.py` extending `BaseAgent`:
-
-```python
-from app.agents.base import BaseAgent, AgentResult
-
-class YourAgent(BaseAgent):
-    async def run(self, context: AgentContext, db: AsyncSession) -> AgentResult:
-        # Implementation
-        return AgentResult(...)
-```
-
-2. Import and add trigger keywords to `MultiAgentOrchestrator.__init__`:
-```python
-self.YOUR_KEYWORDS = ["keyword1", "keyword2"]
-```
-
-3. Add routing decision method:
-```python
-def _needs_your_agent(self, msg: str, memory) -> bool:
-    return any(kw in msg for kw in self.YOUR_KEYWORDS)
-```
-
-4. Add to Phase 2 parallel task list in `process()`.
-
-5. Update `_build_synthesis_context` to include your agent's output.
-
-6. Write tests in `tests/test_your_agent.py`.
-
-7. If the agent should run before or after another agent, adjust the phase assignment.
+- All AI calls go through `BaseAgent._call_ai()` which wraps `groq_circuit.call()` with `asyncio.timeout(30s)`.
+- Tenacity retry: `stop_after_attempt(3)`, `wait_exponential(multiplier=1, min=2, max=30)` — only on `ConnectionError`, `TimeoutError`, `asyncio.TimeoutError`.
+- `AgentRun` rows use `await asyncio.shield()` in the `finally` block to guarantee audit logging even on cancellation.
+- Profile completeness score: `current_weight_kg×0.15 + height_cm×0.15 + usage_goal×0.20 + health_conditions×0.20 + sleep×0.15 + taste_prefs×0.15` → capped at 1.0.
+- `_build_health_context` enforces a ~2000-char hard cap (~500 tokens at 4 chars/token).
+- The `FullUserContext` body snapshot uses a **priority rule**: canonical data (`UserProfile`, `NutritionGoal`) overrides AI-extracted data for `weight_kg`.

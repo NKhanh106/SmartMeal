@@ -5,7 +5,21 @@ import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from "ax
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
-export const TOKEN_KEY = "smartmeal_access_token";
+// ─── Memory-only access token (never persisted) ────────────────────────────────
+
+let _accessToken: string | null = null;
+
+export function setAccessToken(token: string | null): void {
+  _accessToken = token;
+}
+
+export function getAccessToken(): string | null {
+  return _accessToken;
+}
+
+export function clearAccessToken(): void {
+  _accessToken = null;
+}
 
 // ─── API Error ─────────────────────────────────────────────────────────────────
 
@@ -152,11 +166,8 @@ export const apiClient: AxiosInstance = axios.create({
 
 // Attach auth token to every request
 apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  if (typeof window !== "undefined") {
-    const token = localStorage.getItem(TOKEN_KEY);
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
+  if (_accessToken) {
+    config.headers.Authorization = `Bearer ${_accessToken}`;
   }
   return config;
 });
@@ -168,34 +179,26 @@ apiClient.interceptors.response.use(
     const originalRequest = error.config as (import("axios").InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
     if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
       originalRequest._retry = true;
-      const refreshToken = typeof window !== "undefined" ? localStorage.getItem("smartmeal_refresh_token") : null;
-      if (refreshToken) {
-        try {
-          const { data } = await apiClient.post<{ access_token: string; expires_in?: number }>(
-            "/api/v1/auth/refresh",
-            { refresh_token: refreshToken }
-          );
-          localStorage.setItem(TOKEN_KEY, data.access_token);
-          if (typeof window !== "undefined") {
-            document.cookie = `access_token=${data.access_token}; path=/; max-age=${data.expires_in ?? 86400}; SameSite=Lax`;
-          }
-          originalRequest.headers.Authorization = `Bearer ${data.access_token}`;
-          return apiClient(originalRequest);
-        } catch {
-          // Refresh failed — clear tokens and redirect
-          localStorage.removeItem(TOKEN_KEY);
-          localStorage.removeItem("smartmeal_refresh_token");
-          if (typeof window !== "undefined") {
-            document.cookie = "access_token=; path=/; max-age=0";
-            if (!window.location.pathname.includes("/login")) {
-              window.location.href = "/login?reason=session_expired";
-            }
+      try {
+        // Refresh via cookie — no body needed, browser sends cookie automatically
+        const { data } = await apiClient.post<{ access_token: string; expires_in?: number }>(
+          "/api/v1/auth/refresh"
+        );
+        setAccessToken(data.access_token);
+        if (typeof document !== "undefined") {
+          document.cookie = `access_token=${data.access_token}; path=/; max-age=${data.expires_in ?? 86400}; SameSite=Lax`;
+        }
+        originalRequest.headers.Authorization = `Bearer ${data.access_token}`;
+        return apiClient(originalRequest);
+      } catch {
+        // Refresh failed — clear in-memory token and redirect
+        clearAccessToken();
+        if (typeof window !== "undefined") {
+          document.cookie = "access_token=; path=/; max-age=0";
+          if (!window.location.pathname.includes("/login")) {
+            window.location.href = "/login?reason=session_expired";
           }
         }
-      }
-      if (typeof window !== "undefined" && !window.location.pathname.includes("/login")) {
-        localStorage.removeItem(TOKEN_KEY);
-        window.location.href = "/login?reason=session_expired";
       }
     }
     return Promise.reject(ApiError.fromAxiosError(error));

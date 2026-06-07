@@ -21,6 +21,8 @@ class MealLog(Base):
         nullable=False,
     )
 
+    user: Mapped["User"] = relationship("User", back_populates="meal_logs")
+
     nutrition_goal_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         nullable=True,

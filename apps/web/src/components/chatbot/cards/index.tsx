@@ -4,3 +4,4 @@ export { MultiSelectCard } from "./MultiSelectCard";
 export { RankCard } from "./RankCard";
 export { NumberInputCard } from "./NumberInputCard";
 export { ConfirmCard } from "./ConfirmCard";
+export { UpdateProposalCard } from "./UpdateProposalCard";

@@ -12,6 +12,7 @@ Trusted sources:
 - Nutrition: healthline.com, examine.com, nutritionfacts.org
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -29,6 +30,7 @@ from app.core.cache import cache_get, cache_set
 from app.core.config import settings
 from app.core.sanitize import sanitize_for_prompt
 from app.models.agent_run import AgentRun
+from tavily import AsyncTavilyClient
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +174,9 @@ TRUSTED_SOURCES = [
     "medicalnewstoday.com",
 ]
 
+# Domain whitelist for Tavily API (passed as include_domains)
+TRUSTED_DOMAINS = list(TRUSTED_SOURCES)
+
 # Source quality labels
 SOURCE_QUALITY = {
     "pubmed.ncbi.nlm.nih.gov": {"label": "PubMed", "type": "academic", "tier": 1},
@@ -235,7 +240,7 @@ FINDINGS_SCHEMA = """{
 class WebResearcherAgent(BaseAgent):
     name = "web_researcher"
 
-    async def run(
+    async def execute(
         self,
         context: AgentContext,
         db: AsyncSession,
@@ -403,97 +408,230 @@ class WebResearcherAgent(BaseAgent):
             keywords = [w for w in words if w not in stopwords and len(w) > 3]
             return " ".join(keywords[:8])
 
+    # ── Real web search via Tavily ───────────────────────────────────────────────
+
+    async def _fetch_real_results(
+        self,
+        query: str,
+        max_results: int = 5,
+    ) -> list[dict] | None:
+        """
+        Call Tavily API to get real web search results.
+        Returns None if Tavily is not available (falls back to AI synthesis).
+        """
+        if not settings.TAVILY_API_KEY or not settings.TAVILY_ENABLED:
+            logger.warning("[WebResearcher] Tavily not configured — "
+                          "falling back to AI synthesis mode")
+            return None
+
+        try:
+            client = AsyncTavilyClient(api_key=settings.TAVILY_API_KEY)
+            response = await asyncio.wait_for(
+                client.search(
+                    query=query,
+                    max_results=max_results,
+                    search_depth="advanced",
+                    include_domains=TRUSTED_DOMAINS,
+                ),
+                timeout=10.0,
+            )
+            results = response.get("results", [])
+            if not results:
+                return []
+
+            normalized = []
+            for r in results:
+                normalized.append({
+                    "source_url":     r.get("url", ""),
+                    "source_name":    r.get("title", ""),
+                    "snippet":        r.get("content", ""),
+                    "score":          r.get("score", 0.0),
+                    "published_date": r.get("published_date"),
+                    "is_real_source": True,
+                })
+            return normalized
+
+        except asyncio.TimeoutError:
+            logger.warning("[WebResearcher] Tavily timeout — fallback to AI synthesis")
+            return None
+        except Exception as e:
+            logger.error(f"[WebResearcher] Tavily error: {e} — fallback to AI synthesis")
+            return None
+
+    async def _summarize_real_results(
+        self,
+        query: str,
+        original_question: str,
+        real_results: list[dict],
+    ) -> list[dict[str, Any]]:
+        """
+        Use AI to summarize REAL content from Tavily.
+        AI must only summarize existing content — not hallucinate claims or URLs.
+        """
+        content_blocks = []
+        for i, r in enumerate(real_results[:5]):
+            content_blocks.append(
+                f"[Source {i+1}]\n"
+                f"URL: {r['source_url']}\n"
+                f"Title: {r['source_name']}\n"
+                f"Content: {r['snippet'][:500]}\n"
+            )
+        content_text = "\n---\n".join(content_blocks)
+
+        system_prompt = (
+            "Bạn là trợ lý tóm tắt nghiên cứu y khoa. "
+            "Nhiệm vụ: tóm tắt các đoạn text thực từ web search, "
+            "KHÔNG thêm thông tin nào ngoài nội dung được cung cấp. "
+            "KHÔNG tự tạo URLs. KHÔNG tự tạo claims. "
+            "Chỉ tóm tắt và trích dẫn từ content được cho. "
+            "Trả lời bằng JSON theo schema."
+        )
+        user_prompt = (
+            f"Câu hỏi: {original_question}\n\n"
+            f"Nội dung thực từ web search:\n{content_text}\n\n"
+            f"Tóm tắt theo schema:\n{FINDINGS_SCHEMA}\n\n"
+            "QUAN TRỌNG: Chỉ dùng thông tin từ các đoạn text trên. "
+            "Giữ nguyên URLs đã cho. Không thêm URLs mới."
+        )
+
+        response_text = await self._call_ai_raw(system_prompt, user_prompt)
+        findings = self._parse_findings_json(response_text)
+
+        for f in findings:
+            f["is_real_source"] = True
+            f["source_verified"] = True
+
+        return findings
+
+    async def _ai_synthesis_fallback(
+        self,
+        query: str,
+        original_question: str,
+    ) -> list[dict[str, Any]]:
+        """
+        Fallback when Tavily is not available.
+        AI synthesis with explicit disclaimer — does NOT pretend to be web search.
+        """
+        system_prompt = (
+            "Bạn là trợ lý tóm tắt kiến thức y khoa từ training data. "
+            "Hãy cung cấp thông tin tổng quát về câu hỏi. "
+            "QUAN TRỌNG: Không bịa đặt URLs cụ thể. "
+            "Không tự tạo article IDs. "
+            "Chỉ suggest domain nguồn (ví dụ: who.int) không phải URL đầy đủ. "
+            "Trả lời bằng JSON theo schema."
+        )
+        user_prompt = (
+            f"Câu hỏi: {original_question}\n\n"
+            f"Cung cấp thông tin tổng quát theo schema:\n{FINDINGS_SCHEMA}\n\n"
+            "Ghi rõ trong source_url chỉ là domain, VD: 'https://who.int' "
+            "(không phải URL bài cụ thể). "
+            "Đây là tổng hợp từ kiến thức AI, không phải web search thực."
+        )
+
+        response_text = await self._call_ai_raw(system_prompt, user_prompt)
+        findings = self._parse_findings_json(response_text)
+
+        for f in findings:
+            f["is_real_source"] = False
+            f["source_verified"] = False
+            f["ai_synthesis_disclaimer"] = (
+                "Thông tin này được tổng hợp từ kiến thức AI, "
+                "không phải từ web search thực. Vui lòng verify "
+                "trực tiếp từ nguồn trước khi áp dụng."
+            )
+
+        return findings
+
+    async def _call_ai_raw(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = 1024,
+        temperature: float = 0.2,
+    ) -> str:
+        """Call Groq directly (async) and return raw text response."""
+        import time
+        start = time.perf_counter()
+
+        client = self._get_groq_client()
+
+        response = await asyncio.wait_for(
+            groq_circuit.call(
+                client.chat.completions.create(
+                    model=settings.GROQ_TEXT_MODEL,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+            ),
+            timeout=30.0,
+        )
+
+        self._last_usage = {
+            "input_tokens":  response.usage.prompt_tokens if response.usage else None,
+            "output_tokens": response.usage.completion_tokens if response.usage else None,
+            "latency_ms":    int((time.perf_counter() - start) * 1000),
+            "model":         settings.GROQ_TEXT_MODEL,
+        }
+
+        return response.choices[0].message.content or ""
+
+    def _get_groq_client(self):
+        from app.agents.base import _get_groq_client
+        return _get_groq_client()
+
+    def _parse_findings_json(self, raw_text: str) -> list[dict[str, Any]]:
+        """Parse AI JSON response into findings list."""
+        try:
+            cleaned = raw_text.strip()
+            if cleaned.startswith("```"):
+                lines = cleaned.splitlines()
+                cleaned = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+            data = json.loads(cleaned)
+            findings = data.get("findings") or []
+            if findings:
+                for f in findings:
+                    f["search_summary"] = data.get("search_summary", "")
+                    f["overall_confidence"] = data.get("confidence", 0.5)
+                return findings
+            return []
+        except (json.JSONDecodeError, Exception):
+            logger.warning("[WebResearcher] Failed to parse findings JSON: %s", raw_text[:200])
+            return []
+
     async def _execute_web_search(
         self,
         query: str,
         original_question: str,
     ) -> list[dict[str, Any]]:
         """
-        Execute a web search using the Groq AI with web search tool.
-        Returns raw search results.
+        Execute web search with real-first strategy:
+        1. Tavily real search → AI summarize real content
+        2. Fallback: AI synthesis with explicit disclaimer
         """
-        if not settings.GROQ_API_KEY:
-            logger.warning("WebResearcherAgent: GROQ_API_KEY not set, returning empty results")
-            return []
+        # ── Attempt real search ─────────────────────────────────────────
+        real_results = await self._fetch_real_results(query)
 
-        try:
-            from app.agents.base import _get_groq_client
-            import asyncio
-
-            client = _get_groq_client()
-
-            # Build a research-focused prompt
-            system_prompt = (
-                "Bạn là một trợ lý nghiên cứu y khoa. "
-                "Tìm kiếm thông tin khoa học về câu hỏi của người dùng. "
-                "LUÔN trả lời bằng JSON theo đúng schema."
-                "Nếu không tìm được thông tin, trả về JSON rỗng: {\"findings\": []}."
-                f"Schema:\n{FINDINGS_SCHEMA}"
-            )
-
-            user_prompt = (
-                f"Câu hỏi gốc: {original_question}\n\n"
-                f"Truy vấn tìm kiếm: {query}\n\n"
-                f"Thực hiện tìm kiếm web và trả kết quả theo schema:\n{FINDINGS_SCHEMA}\n\n"
-                "QUY TẮC QUAN TRỌNG:\n"
-                "- Chỉ bao gồm nguồn từ: who.int, healthline.com, pubmed.ncbi.nlm.nih.gov, "
-                "vinmec.com, suckhoedoisong.vn, bacsidanang.vn, examine.com, nutritionfacts.org, "
-                "cdc.gov, mayoclinic.org, nih.gov, medicalnewstoday.com\n"
-                "- Nếu không có kết quả từ nguồn đáng tin cậy, trả về {\"findings\": []}\n"
-                "- key_finding phải bằng tiếng Việt\n"
-                "- Mỗi nguồn chỉ chọn 1 key_finding quan trọng nhất\n"
-                "- Nếu câu hỏi không liên quan đến y tế/dinh dưỡng, trả về {\"findings\": []}"
-            )
-
-            import time
-            start = time.perf_counter()
-
-            async def _do_search():
-                return await client.chat.completions.create(
-                    model=settings.GROQ_TEXT_MODEL,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    max_tokens=1024,
-                    temperature=0.2,
-                )
-
-            async with asyncio.timeout(30):
-                response = await groq_circuit.call(_do_search)
-
-            self._last_usage = {
-                "input_tokens": response.usage.prompt_tokens if response.usage else None,
-                "output_tokens": response.usage.completion_tokens if response.usage else None,
-                "latency_ms": int((time.perf_counter() - start) * 1000),
-                "model": settings.GROQ_TEXT_MODEL,
-            }
-
-            raw_text = response.choices[0].message.content or ""
-
-            # Try to parse as JSON
-            try:
-                # Strip markdown code blocks if present
-                cleaned = raw_text.strip()
-                if cleaned.startswith("```"):
-                    lines = cleaned.splitlines()
-                    cleaned = "\n".join(lines[1:-1] if lines[-1] == "```" else lines[1:])
-                data = json.loads(cleaned)
-                findings = data.get("findings") or []
-                if findings:
-                    # Add the search summary and confidence to each finding
-                    for f in findings:
-                        f["search_summary"] = data.get("search_summary", "")
-                        f["overall_confidence"] = data.get("confidence", 0.5)
-                    return findings
-                return []
-            except json.JSONDecodeError:
-                logger.warning("WebResearcherAgent: failed to parse JSON response: %s", raw_text[:200])
+        if real_results is not None:
+            if not real_results:
                 return []
 
-        except Exception as exc:
-            logger.error("WebResearcherAgent: search execution failed: %s", exc, exc_info=True)
-            return []
+            return await self._summarize_real_results(
+                query=query,
+                original_question=original_question,
+                real_results=real_results,
+            )
+        else:
+            # Tavily unavailable — AI synthesis with disclaimer
+            logger.warning("[WebResearcher] Using AI synthesis fallback — "
+                         "results will be labeled as AI-generated")
+            return await self._ai_synthesis_fallback(
+                query=query,
+                original_question=original_question,
+            )
 
     def _filter_trusted_sources(
         self,

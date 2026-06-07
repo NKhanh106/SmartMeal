@@ -12,6 +12,8 @@ export interface ChatMessage {
   isError?: boolean;
   /** Full card payload when message_type === "card" */
   card?: ChatCard;
+  /** Depth mode used to generate this assistant response */
+  depth?: "quick" | "deep" | "expert";
 }
 
 // ─── Interactive Card Types ──────────────────────────────────────────────────────

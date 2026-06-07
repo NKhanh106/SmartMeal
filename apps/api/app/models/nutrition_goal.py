@@ -14,7 +14,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
 from app.models.enums import NutritionGoalType
@@ -25,11 +25,13 @@ class NutritionGoal(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), 
-        ForeignKey("users.id", ondelete="CASCADE"), 
-        nullable=False
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
     )
-    
+
+    user: Mapped["User"] = relationship("User", back_populates="nutrition_goals")
+
     goal_type: Mapped[NutritionGoalType] = mapped_column(
         Enum(NutritionGoalType, name="nutrition_goal_type", create_type=False),
         nullable=False

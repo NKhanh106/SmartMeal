@@ -9,6 +9,8 @@ from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 
 from app.api.v1 import (
     admin_agents,
@@ -48,9 +50,23 @@ async def lifespan(app: FastAPI):
         logger.info("Redis connected")
     except Exception as e:
         logger.warning(f"Redis unavailable — running without cache: {e}")
+
+    # FIX-6 A4: Start the extractor queue worker.
+    # This runs as a tracked background task inside the worker process.
+    # Each gunicorn worker starts its own worker loop — all share the Redis queue.
+    # The worker blocks on BRPOP, so it uses no CPU when idle.
+    from app.core.background import extractor_queue_worker_loop, create_tracked_task
+    create_tracked_task(
+        extractor_queue_worker_loop(),
+        task_name="extractor_queue_worker",
+    )
+    logger.info("[Lifespan] Extractor queue worker started")
+
     yield
+
     # Shutdown
     await cache_close()
+    logger.info("[Lifespan] Shutdown complete")
 
 
 app = FastAPI(
@@ -74,6 +90,35 @@ if ENV == "production":
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+        # connect-src: 'self' for same-origin API calls.
+        # api.anthropic.com is included for future Anthropic SDK usage on the backend
+        # (Groq calls happen server-side and are not affected by browser CSP).
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: https:; "
+            "connect-src 'self' https://api.anthropic.com; "
+            "frame-ancestors 'none'"
+        )
+        return response
+
+
+# Security headers middleware MUST be the outermost layer so it sees the final
+# response AFTER all other middleware (including CORS) have processed it.
+# In Starlette, the last-registered middleware wraps the route closest,
+# executing innermost on request and outermost on response.
+app.add_middleware(SecurityHeadersMiddleware)
 
 if settings.BACKEND_CORS_ORIGINS:
     cors_origins = [str(origin).rstrip("/") for origin in settings.BACKEND_CORS_ORIGINS]

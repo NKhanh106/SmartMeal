@@ -1,169 +1,224 @@
-# Thư mục `chatbot/` — AI Chatbot System
+# `app/chatbot/` — Conversational AI Interface Layer
 
-## Mục đích
+## Module Overview & Domain Boundaries
 
-Chứa hệ thống **chatbot AI** thông minh của SmartMeal — cho phép người dùng trò chuyện tự nhiên về dinh dưỡng, bữa ăn, và sức khỏe. Chatbot sử dụng AI (Groq) để hiểu câu hỏi và đưa ra câu trả lời phù hợp với ngữ cảnh cá nhân.
+This folder implements the **conversational AI layer** of SmartMeal — the interface between the user-facing chatbot (web frontend) and the multi-agent backend. It governs:
 
-## Tính năng
+- **Chat session lifecycle**: creation, pagination, soft-delete, title management.
+- **Message persistence**: storing user/assistant messages with role and type discrimination.
+- **Context assembly**: aggregating all user data into a structured prompt context for the AI.
+- **Hard-rule card triggers**: deterministic profile-gated cards that fire before AI is consulted.
+- **Streaming responses**: SSE-based streaming with AI-driven tool calls (`ask_user` card tool).
+- **Card interaction flow**: handling card responses, profile updates, and AI resumption.
+- **Prompt construction**: system prompts, user prompt templates, insight extraction prompts.
+- **Chat title generation**: automatic session titling from first user message.
 
-- Trò chuyện tự nhiên bằng **tiếng Việt / tiếng Anh**
-- Tư vấn dinh dưỡng **cá nhân hóa** dựa trên profile & goals
-- Truy cập dữ liệu meal logs và progress
-- Tích hợp với AI providers (Groq — cho tốc độ phản hồi nhanh)
-- Ghi nhớ **ngữ cảnh** cuộc trò chuyện (profile, goals, meal history)
-- **Streaming response** — hiển thị token từng phần, giảm perceived latency từ ~5s xuống gần như instant
-- **Conversation insights** — trích xuất allergies, preferences từ cuộc trò chuyện
+The chatbot does **not** own meal extraction or memory writing directly — those are dispatched as background tasks to the `ExtractorAgent` after every message turn.
 
-## Các thành phần
+---
 
-| File | Mô tả |
-|------|--------|
-| `service.py` | Core logic: xử lý tin nhắn, gọi AI, lưu tin nhắn, trích xuất insights |
-| `context_builder.py` | Xây dựng context cho AI: user profile, goals, recent meals, progress |
-| `context_policy.py` | Quy tắc truy cập dữ liệu, privacy protection, validation |
-| `prompts.py` | System prompt (hướng dẫn AI persona), prompt builders |
-| `utils.py` | Helper: sinh chat title từ nội dung |
+## File Registry & Critical Path Map
 
-## Conversation Flow
+| File Path | Authoritative Component / Class | Inbound Dependencies | Core Technical Responsibility |
+|---|---|---|---|
+| `service.py` | `send_chat_message()`, `process_streaming_message()`, `process_card_response_and_stream()`, `ASK_USER_TOOL` | `get_ai_provider`, `WebResearcherAgent`, `sanitize_for_prompt`, `build_chatbot_context` | Core chat handler (non-streaming + streaming); SSE yield; Groq `AsyncGroq` streaming; `ask_user` tool for AI-driven cards; session/msg persistence; `fired_triggers` state on session; `asyncio.timeout(60)` on all streams |
+| `context_builder.py` | `build_chatbot_context()`, `build_health_context()`, `DEFAULT_CHATBOT_CONTEXT_POLICY` | `dashboard_service`, `conversation_insights_service`, `selectinload`, `sanitize_for_prompt` | Aggregates profile, goal, dashboards, meals, recommendations, insights, chat history into a single dict; sanitises every free-text field before prompt injection; 30-field profile serialisation |
+| `prompts.py` | `CHATBOT_SYSTEM_PROMPT`, `build_chatbot_user_prompt()`, `INSIGHT_EXTRACTION_SYSTEM_PROMPT`, `build_insight_extraction_prompt()` | `json` stdlib | System prompt (Vietnamese); user prompt wrapping context as JSON (`json.dumps(ensure_ascii=False)`); insight extraction prompts |
+| `card_triggers.py` | `check_hard_rule_triggers()`, `_is_nutrition_question()`, `_has_health_keywords()`, `_has_plan_keywords()` | `UserProfile`, `ChatCard` schema | 4 hard-rule triggers checked before AI: `missing_profile`, `missing_goal`, `missing_health_conditions`, `missing_weight`; `fired_triggers` prevents repeat; keyword lists per rule |
+| `utils.py` | `build_chat_title()` | — | Auto-generates session titles from first message; max 6 words / 40 chars |
+| `context_policy.py` | `ChatbotContextPolicy`, `DEFAULT_CHATBOT_CONTEXT_POLICY` | — | Token budget policy: `max_recent_meals=5`, `max_chat_history_messages=8`, `include_weekly_dashboard=True` |
+
+---
+
+## Local Invariants & Production Logic Rules
+
+### Chat Session Pagination
+
+- Cursor-based pagination on `last_message_at` / `updated_at` tie-break.
+- Page size: `limit + 1` to detect `has_more`.
+- Excludes `status = "deleted"` sessions.
+
+### Hard-Rule Card Trigger Sequence
 
 ```
-User sends message
+process_streaming_message()
     │
     ▼
-save_chat_message (role="user")
+check_hard_rule_triggers(user_message, profile, fired_triggers)
     │
-    ▼
-build_chatbot_context (profile + goals + history)
+    ├─► Rule 1: profile is None → "missing_profile" confirm card
+    ├─► Rule 2: usage_goal is None + _is_nutrition_question() → goal select card
+    ├─► Rule 3: health_conditions is None + _has_health_keywords() → health confirm card
+    ├─► Rule 4: current_weight_kg is None + _has_plan_keywords() → weight number input card
     │
-    ▼
-build_chatbot_user_prompt (system + context + message)
-    │
-    ▼
-get_ai_provider("groq") → Groq API
-    │
-    ├── Streaming: yield tokens → SSE → Frontend
-    └── Non-streaming: wait full response → save to DB
-    │
-    ▼
-save_chat_message (role="assistant")
-    │
-    ▼
-extract_insights_from_conversation (allergies, preferences)
-    │
-    ▼
-upsert_conversation_insights (AI insights → DB)
-    │
-    ▼
-Commit transaction
+    └─► No match → proceed to Groq AI streaming
 ```
 
-## Context Building (`context_builder.py`)
+### Keyword Lists for Hard Rules
 
-AI được cung cấp context để câu trả lời cá nhân hóa:
+| Rule | Keywords |
+|---|---|
+| `_is_nutrition_question` | `ăn`, `uống`, `dinh dưỡng`, `thực đơn`, `calo`, `protein`, `giảm`, `tăng`, `chế độ`, `bữa`, `món`, `thực phẩm`, `gym` |
+| `_has_health_keywords` | `tiểu đường`, `huyết áp`, `gout`, `thận`, `gan`, `dị ứng`, `bệnh`, `thuốc`, `điều trị`, `kiêng` |
+| `_has_plan_keywords` | `thực đơn`, `kế hoạch ăn`, `calories`, `macro`, `bữa ăn cho` |
 
-```python
-context = {
-    "user_profile": { height, weight, age, gender, activity_level, ... },
-    "nutrition_goal": { daily_calorie_target, protein_target, ... },
-    "recent_meals": [5 recent meal logs],
-    "recent_progress": [weight trend],
-    "allergies": "hải sản, đậu phộng",
-    "diet_preferences": "ăn chay, keto",
-    "language": "vi",  # ngôn ngữ mặc định
+### AI-Driven Card Tool Schema (`ask_user`)
+
+```json
+{
+  "name": "ask_user",
+  "input_schema": {
+    "card_type": "single_select | multi_select | rank | number_input | confirm",
+    "title": "string (max 60 chars, Vietnamese)",
+    "subtitle": "string (max 100 chars, optional)",
+    "options": "[{id, label, icon}]",
+    "unit": "string (number_input only)",
+    "min_value": "number (number_input only)",
+    "max_value": "number (number_input only)"
+  }
 }
 ```
 
-## Streaming Response
+Constraint: max **1 card per response**. On card fire, stream stops and waits for card response.
 
-Chatbot hỗ trợ **Server-Sent Events (SSE)** để streaming tokens:
+### Context Policy Limits
+
+| Field | Default | Purpose |
+|---|---|---|
+| `max_recent_meals` | 5 | Recent meal logs in context |
+| `max_chat_history_messages` | 8 | Chat history messages |
+| `include_weekly_dashboard` | `True` | 7-day nutrition summary |
+| `include_daily_recommendation` | `True` | Latest AI daily plan |
+| `include_progress_logs` | `False` | Body measurements |
+
+### Sanitisation Points in Context
+
+Every free-text field passes through `sanitize_for_prompt()` before entering the AI prompt (FIX-7):
+
+- All `UserProfile` free-text fields (nested JSONB values included).
+- All `ConversationInsight` `summary` and `value` fields.
+- All `ChatMessage.content` from history.
+- The current `user_question` at entry point.
+
+### Stream Timeout
+
+All `AsyncGroq` streaming calls are wrapped in `asyncio.timeout(60)` — 60-second hard limit per turn.
+
+### Card Response → Profile Field Mapping
+
+| `trigger_reason` | Profile Field | Extractor |
+|---|---|---|
+| `missing_goal` | `usage_goal` | `selected_ids[0]` |
+| `missing_weight` | `current_weight_kg` | `number_value` or `selected_ids[0]` as float |
+
+### FIX-8 DB Session Safety (C-2)
+
+The `process_card_response_and_stream` path uses an outer `try/finally` to guarantee `_close_stream_db()` on every exit:
+
+- Normal completion
+- `asyncio.TimeoutError`
+- `json.JSONDecodeError` on tool call
+- Any exception
+
+On abnormal SSE disconnect mid-stream, the session is rolled back before being returned to the pool, preventing poison state.
+
+---
+
+## Intra-Module Request Flow
+
+### Streaming Chat Message Flow (Normal Path)
 
 ```
-Frontend                    Backend
-   │                           │
-   │── POST /messages/stream ──▶│
-   │                           │── Groq API ──▶
-   │                           │◀─ token 1 ──
-   │◀─ data: {delta: "X"} ────│
-   │                           │◀─ token 2 ──
-   │◀─ data: {delta: "Y"} ────│
-   │         ...               │
-   │◀─ data: {done: true} ────│
+POST /chatbot/stream
+    │
+    ▼
+process_streaming_message()
+    │
+    ├─► save_chat_message(role="user") → db.commit()
+    │
+    ├─► sanitize_for_prompt(user_content)
+    │
+    ├─► build_chatbot_context()
+    │    ├─► select UserProfile
+    │    ├─► select NutritionGoal (active)
+    │    ├─► get_daily_dashboard()  (Asia/Ho_Chi_Minh)
+    │    ├─► get_weekly_dashboard() (if policy.include)
+    │    ├─► select MealLog (last N, with selectinload)
+    │    ├─► select DailyRecommendation (latest)
+    │    ├─► select ChatMessage (last N for history)
+    │    └─► get_active_insights()
+    │         └─► sanitize_for_prompt on every text field
+    │
+    ├─► check_hard_rule_triggers()  ──► Card fires?
+    │    └─► YES: save_card_message → db.commit() → yield SSE card → RETURN
+    │
+    ├─► Groq AsyncGroq streaming (max_tokens=1024, temp=0.4)
+    │    │
+    │    ├─► Tool call (ask_user)?
+    │    │    ├─► _build_card_from_tool_input()
+    │    │    ├─► save_card_message() → db.commit()
+    │    │    └─► yield SSE card → RETURN
+    │    │
+    │    └─► Text delta → yield SSE delta
+    │
+    ├─► save_chat_message(role="assistant", full_response)
+    │    └─► db.commit()
+    │
+    ├─► yield done SSE
+    │
+    └─► background_tasks.add_task(_bg_extractor_agent)
 ```
 
-Perceived latency giảm từ ~5-10s xuống gần như instant vì text hiển thị từng từ.
-
-## Conversation Insights
-
-Sau mỗi cuộc trò chuyện, hệ thống trích xuất insights:
-
-```python
-insights = {
-    "insight_type": "health_constraint",
-    "key": "allergy_seafood",
-    "value": "dị ứng hải sản nhẹ",
-    "summary": "Người dùng dị ứng hải sản"
-}
-```
-
-Insights được dùng để cá nhân hóa gợi ý về sau.
-
-## Rate Limiting
-
-- Non-streaming: **20 requests/phút/IP**
-- Streaming: **20 requests/phút/IP**
-
-## Database Schema
+### Card Response Flow
 
 ```
-chat_sessions
-├── id: UUID (PK)
-├── user_id: UUID (FK)
-├── title: String (auto-generated from first message)
-├── status: String (active | deleted)
-├── last_message_at: DateTime
-└── created_at, updated_at
-
-chat_messages
-├── id: UUID (PK)
-├── session_id: UUID (FK)
-├── role: String (user | assistant | system)
-├── content: Text
-├── metadata: JSON (prompt_version, provider, ai_log_id)
-└── created_at
-
-conversation_insights
-├── id: UUID (PK)
-├── user_id: UUID (FK)
-├── session_id: UUID (FK)
-├── insight_type: String
-├── key: String
-├── value: Text
-├── summary: String
-├── is_active: Boolean
-└── created_at, updated_at
+POST /chatbot/card-response
+    │
+    ▼
+process_card_response_and_stream()
+    │
+    ├─► Find matching ChatMessage (role=assistant, type=card, no response yet)
+    │
+    ├─► card_msg.card_response = card_response.model_dump()
+    │    └─► db.flush()
+    │
+    ├─► _update_profile_from_card_response()
+    │    └─► setattr(profile, field, value)
+    │         └─► db.commit()
+    │
+    ├─► _build_card_response_text()  ──► "Có, Mục tiêu: Giảm cân"
+    │
+    ├─► save_chat_message(role=user, type=card_response)
+    │    └─► db.commit()
+    │
+    ├─► await db.close()  ← close original session before streaming
+    │
+    ├─► Groq AsyncGroq streaming (new session via _get_stream_db())
+    │
+    └─► Outer try/finally:
+         └─► _close_stream_db()  ← ALWAYS runs on every exit path
+              └─► rollback() → close()
 ```
 
-## Frontend Integration
+### Background Extractor Task Flow
 
-Frontend giao tiếp qua `apps/web/src/services/chatbot.service.ts`:
-
-```typescript
-// Tạo hoặc lấy session
-const session = await getOrCreateSession();
-
-// Gửi message và nhận streaming response
-const response = await api.post<SSE>(
-  `/api/v1/ai/chat/sessions/${sessionId}/messages/stream`,
-  { content: userMessage }
-);
-
-// Hoặc gửi message thường (chờ response đầy đủ)
-const result = await chatbotService.sendMessage("Hôm nay tôi ăn gì?");
 ```
-
-## Best Practices
-
-- Mỗi lần gửi message đều **build context mới** để AI có thông tin cập nhật nhất
-- **Session ID được cache** trong sessionStorage để duy trì conversation history
-- Insights chỉ được extract khi có **ít nhất 2 messages** (user + assistant)
-- Privacy: không bao giờ expose dữ liệu của user A cho user B
+BackgroundTasks.add_task(_bg_extractor_agent, ...)
+    │
+    ▼
+_bg_extractor_agent(user_id, session_id, user_message, ai_response)
+    │
+    ├─► AsyncSessionLocal() (new session, self-contained)
+    │
+    ├─► select User
+    ├─► get_or_create_memory(user_id)
+    │
+    ├─► select ChatMessage (last 6, reversed) → conversation_history
+    │
+    ├─► AgentContext(user, session_id, current_message, history, memory)
+    │
+    ├─► ExtractorAgent.run() → result
+    │    └─► Writes ConversationInsight + UserMemory via MemoryWriteEngine
+    │
+    └─► db.commit()
+```

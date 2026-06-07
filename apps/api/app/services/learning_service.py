@@ -147,10 +147,14 @@ async def get_learned_correction(
 
     # Most common corrected food
     id_counts = Counter(str(cid) for cid, _ in corrected_ids)
-    most_common_id = UUID(list(id_counts.most_common(1))[0][0])
+    most_common = id_counts.most_common(1)
+    if not most_common:
+        return None
+    most_common_id, _ = most_common[0]
+    most_common_id = UUID(most_common_id)
 
     # Confidence based on consistency (if user consistently corrects to same food)
-    most_common_count = id_counts.most_common(1)[0][1]
+    most_common_count = most_common[0][1]
     consistency = min(1.0, most_common_count / 3.0)  # 3 corrections = full confidence
 
     return most_common_id, consistency

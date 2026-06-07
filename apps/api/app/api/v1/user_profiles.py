@@ -1,5 +1,7 @@
 from uuid import UUID
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -15,6 +17,10 @@ from app.schemas.profile import (
     UserProfileResponse,
     UserProfileUpdate,
 )
+
+from app.services.daily_recommendation_service import invalidate_user_plan_cache
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/user-profiles", tags=["User Profiles"])
 
@@ -69,6 +75,16 @@ async def create_user_profile(
         )
 
     await db.refresh(profile)
+
+    try:
+        await invalidate_user_plan_cache(current_user.id)
+    except Exception:
+        logger.warning(
+            "Cache invalidation failed after write",
+            extra={"path": "POST /user-profiles", "user_id": str(current_user.id)},
+            exc_info=True,
+        )
+
     return profile
 
 
@@ -107,10 +123,19 @@ async def update_my_user_profile(
     await db.refresh(profile)
     await cache_delete(make_cache_key("user_profile", str(current_user.id)))
 
+    try:
+        await invalidate_user_plan_cache(current_user.id)
+    except Exception:
+        logger.warning(
+            "Cache invalidation failed after write",
+            extra={"path": "PUT /user-profiles/me", "user_id": str(current_user.id)},
+            exc_info=True,
+        )
+
     # If usage_goal was just set or changed, suggest creating a matching nutrition goal
     new_usage_goal = profile.usage_goal
     if new_usage_goal and new_usage_goal != old_usage_goal:
-        _suggest_nutrition_goal_from_usage(current_user.id, new_usage_goal, profile, db)
+        await _suggest_nutrition_goal_from_usage(current_user.id, new_usage_goal, profile, db)
 
     return profile
 
@@ -146,10 +171,19 @@ async def update_user_profile_by_id(
     await db.refresh(profile)
     await cache_delete(make_cache_key("user_profile", str(user_id)))
 
+    try:
+        await invalidate_user_plan_cache(user_id)
+    except Exception:
+        logger.warning(
+            "Cache invalidation failed",
+            extra={"endpoint": "update_user_profile_by_id", "user_id": user_id},
+            exc_info=True,
+        )
+
     # If usage_goal was just set or changed, suggest creating a matching nutrition goal
     new_usage_goal = profile.usage_goal
     if new_usage_goal and new_usage_goal != old_usage_goal:
-        _suggest_nutrition_goal_from_usage(user_id, new_usage_goal, profile, db)
+        await _suggest_nutrition_goal_from_usage(user_id, new_usage_goal, profile, db)
 
     return profile
 
@@ -228,6 +262,14 @@ async def _suggest_nutrition_goal_from_usage(
     )
     db.add(new_goal)
     await db.commit()
+    try:
+        await invalidate_user_plan_cache(user_id)
+    except Exception:
+        logger.warning(
+            "Cache invalidation failed",
+            extra={"endpoint": "_suggest_nutrition_goal_from_usage", "user_id": user_id},
+            exc_info=True,
+        )
 
 
 def calculate_age(dob) -> int:

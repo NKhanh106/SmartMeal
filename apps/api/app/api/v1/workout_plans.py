@@ -1,5 +1,7 @@
 from uuid import UUID
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,7 +23,10 @@ from app.schemas.workout import (
     WorkoutPlanWithItemsCreate,
 )
 from app.schemas.exercise import ExerciseResponse
+from app.services.daily_recommendation_service import invalidate_user_plan_cache
 from app.services import workout_service as service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/workout-plans", tags=["Workout Plans"])
 
@@ -171,6 +176,16 @@ async def create_workout_plan(
     )
     await db.commit()
     await db.refresh(plan)
+
+    try:
+        await invalidate_user_plan_cache(current_user.id)
+    except Exception:
+        logger.warning(
+            "Cache invalidation failed",
+            extra={"endpoint": "create_workout_plan", "user_id": current_user.id},
+            exc_info=True,
+        )
+
     return plan
 
 
@@ -202,6 +217,16 @@ async def create_workout_plan_with_items(
 
     await db.commit()
     await db.refresh(plan)
+
+    try:
+        await invalidate_user_plan_cache(current_user.id)
+    except Exception:
+        logger.warning(
+            "Cache invalidation failed",
+            extra={"endpoint": "create_workout_plan_with_items", "user_id": current_user.id},
+            exc_info=True,
+        )
+
     return plan
 
 
@@ -289,6 +314,16 @@ async def update_workout_plan(
     )
     await db.commit()
     await db.refresh(plan)
+
+    try:
+        await invalidate_user_plan_cache(current_user.id)
+    except Exception:
+        logger.warning(
+            "Cache invalidation failed",
+            extra={"endpoint": "update_workout_plan", "user_id": current_user.id},
+            exc_info=True,
+        )
+
     return plan
 
 
@@ -304,6 +339,16 @@ async def delete_workout_plan(
         user_id=current_user.id,
     )
     await db.commit()
+
+    try:
+        await invalidate_user_plan_cache(current_user.id)
+    except Exception:
+        logger.warning(
+            "Cache invalidation failed after write",
+            extra={"path": "DELETE /workout-plans/{plan_id}", "user_id": str(current_user.id)},
+            exc_info=True,
+        )
+
     return None
 
 
@@ -324,6 +369,16 @@ async def add_workout_item(
     )
     await db.commit()
     await db.refresh(item)
+
+    try:
+        await invalidate_user_plan_cache(current_user.id)
+    except Exception:
+        logger.warning(
+            "Cache invalidation failed",
+            extra={"endpoint": "add_workout_item", "user_id": current_user.id},
+            exc_info=True,
+        )
+
     return item
 
 
@@ -344,6 +399,16 @@ async def update_workout_item(
     )
     await db.commit()
     await db.refresh(item)
+
+    try:
+        await invalidate_user_plan_cache(current_user.id)
+    except Exception:
+        logger.warning(
+            "Cache invalidation failed",
+            extra={"endpoint": "update_workout_item", "user_id": current_user.id},
+            exc_info=True,
+        )
+
     return item
 
 
@@ -359,6 +424,16 @@ async def delete_workout_item(
         user_id=current_user.id,
     )
     await db.commit()
+
+    try:
+        await invalidate_user_plan_cache(current_user.id)
+    except Exception:
+        logger.warning(
+            "Cache invalidation failed after write",
+            extra={"path": "DELETE /workout-plans/items/{item_id}", "user_id": str(current_user.id)},
+            exc_info=True,
+        )
+
     return None
 
 
@@ -414,4 +489,14 @@ async def generate_workout_plan(
 
     await db.commit()
     await db.refresh(plan)
+
+    try:
+        await invalidate_user_plan_cache(current_user.id)
+    except Exception:
+        logger.warning(
+            "Cache invalidation failed",
+            extra={"endpoint": "generate_workout_plan", "user_id": current_user.id},
+            exc_info=True,
+        )
+
     return plan
