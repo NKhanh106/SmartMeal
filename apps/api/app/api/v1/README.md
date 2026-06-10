@@ -63,6 +63,28 @@ Source field tracks how the meal was logged: `manual` (user entry), `chat_extrac
 | POST | `/nutrition-goals` | Create goal | Required |
 | PUT | `/nutrition-goals/{id}` | Update goal | Required |
 
+### Nutrition Pending State (`/nutrition/pending`)
+
+Meals extracted by the AI are stored as `PENDING` records and must be confirmed by the user.
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| GET | `/nutrition/pending` | List pending meal logs awaiting user confirmation | Required |
+| PATCH | `/nutrition/pending/{id}/confirm` | Confirm a pending meal (applies BMR floor + negative clamp + recalculates totals) | Required |
+
+**PENDING State Lifecycle:**
+1. `create_tracked_task(extractor_queue_worker_loop())` runs `ExtractorAgent` (Phase 3, Redis BRPOP queue) after HTTP response begins.
+2. `ExtractorAgent` writes `MealLog` with `status=PENDING`, `total_calories=sum_of_items`, `source=chat_extraction`.
+3. Frontend polls `GET /nutrition/pending` to surface `MealConfirmationCard` (with quantity stepper, macro grid).
+4. User edits food items (quantity +/-) and clicks **"✓ Xác nhận lưu"**.
+5. `PATCH /nutrition/pending/{id}/confirm` acquires `SELECT FOR UPDATE` row lock, applies per-item negative clamp (calories/protein/carb/fat ≥ 0), enforces BMR floor (total ≥ BMR × 1.0), recalculates totals, sets `status=APPROVED`.
+
+**BMR Floor (D-2 / D-3):**
+The `confirm_pending_meal_log()` service function queries all APPROVED meals for the same user on the same date and rejects the confirmation if the projected daily total would fall below `1.0 × BMR`. This prevents under-eating which is dangerous for sustained weight loss.
+
+**Negative Clamp (D-5):**
+Before summing, each field (`calories`, `protein_g`, `carb_g`, `fat_g`) is clamped to `max(value, 0.0)`. This prevents a single malicious item from inflating totals or bypassing the floor check.
+
 ### Dashboard (`/dashboard`)
 
 | Method | Path | Description | Auth |
@@ -93,15 +115,15 @@ Source field tracks how the meal was logged: `manual` (user entry), `chat_extrac
 | GET | `/progress-logs` | List progress entries | Required |
 | POST | `/progress-logs` | Create entry | Required |
 
-### AI Chatbot (`/chat`)
+### AI Chatbot (`/ai/chat`)
 
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
-| GET | `/chat/sessions` | List chat sessions | Required |
-| POST | `/chat/sessions` | Create new session | Required |
-| GET | `/chat/sessions/{id}/messages` | Get session messages | Required |
-| POST | `/chat/sessions/{id}/messages` | Send message | Required |
-| GET | `/chat/sessions/{id}/messages/stream` | SSE stream response | Required |
+| GET | `/ai/chat/sessions` | List chat sessions | Required |
+| POST | `/ai/chat/sessions` | Create new session | Required |
+| GET | `/ai/chat/sessions/{id}/messages` | Get session messages | Required |
+| POST | `/ai/chat/sessions/{id}/messages` | Send message | Required |
+| POST | `/ai/chat/sessions/{id}/messages/stream` | SSE stream response | Required |
 
 ### AI Daily Planner (`/ai/daily-planner`)
 
@@ -155,7 +177,7 @@ Source field tracks how the meal was logged: `manual` (user entry), `chat_extrac
 |----------|-------|
 | `/auth/login` | 10/min per IP |
 | `/auth/register` | 5/min per IP |
-| `/chat/*/messages/stream` | 30/min per user |
+| `/ai/chat/sessions/*/messages/stream` | 30/min per user |
 | All other endpoints | 100/min per user |
 
 Rate limit headers are included in responses:
@@ -167,27 +189,53 @@ X-RateLimit-Reset: 1640000000
 
 ## SSE Streaming Format
 
-The chat streaming endpoint (`GET /chat/sessions/{id}/messages/stream`) uses Server-Sent Events (SSE).
+The chat streaming endpoint (`POST /ai/chat/sessions/{id}/messages/stream`) uses Server-Sent Events (SSE).
 
 ### Event Types
 
+| Event | Format | Description |
+|---|---|---|
+| `event: depth` | `event: depth\ndata: {depth}\n\n` | Depth mode indicator (quick/deep/expert) |
+| `event: agent_result` | `event: agent_result\ndata: {...}\n\n` | Per-agent structured output (health, nutrition, fitness, research) — consumed by SMA-Eval benchmark |
+| `event: card` | `event: card\ndata: {...}\n\n` | Interactive confirmation card (priority 1–5) |
+| `event: update_proposal` | `event: update_proposal\ndata: {...}\n\n` | Profile update proposal from ExtractorAgent Phase 3 |
+| `data: {delta}` | `data: {"delta": "..."}\n\n` | Incremental AI text token |
+| `data: {done}` | `data: {"done": true}\n\n` | Stream completion marker |
+| `data: {error}` | `data: {"error": "..."}\n\n` | Error signal |
+
+### Example SSE Stream
+
 ```
+event: depth
+data: deep
+
+event: agent_result
+data: {"agent": "health", "success": true, "content": {...}, "confidence": 0.85, "priority": 1}
+
+event: agent_result
+data: {"agent": "nutrition", "success": true, "content": {...}, "confidence": 0.92, "priority": 5}
+
 event: card
-data: {"type":"single_select","title":"Bạn muốn giảm bao nhiêu kg?","options":[...]}
+data: {"card_id": "confirm", "title": "Xác nhận nhật ký ăn uống", ...}
 
-data: Xin chào! Hãy cho tôi biết...
+data: {"delta": "Xin chào! Hãy cho tôi biết thêm về bữa sáng của bạn nhé..."}
 
-data: Tiếp theo, tôi khuyên bạn...
-
-data: [DONE]
-
-data: [ERROR] Đã có lỗi xảy ra
+data: {"done": true}
 ```
 
-**Card events** fire when the system needs clarification. Multiple agents may suggest cards; the orchestrator returns the highest-priority one. Card types: `single_select`, `multi_select`, `rank`, `number_input`, `confirm`.
+**Card priority:** Priority 1 (urgent health warning) > Priority 2 (mandatory profile) > Priority 3 (concerning health) > Priority 5 (clarification). The orchestrator returns the highest-priority card and halts the stream.
 
-**Text deltas** are streamed as `data:` lines with incremental AI text.
+## Interactive Meal Confirmation Card (Frontend)
 
-**Stream completion** is signaled by `data: [DONE]`.
+After the backend confirms a PENDING meal, the frontend renders a `MealConfirmationCard` component with the following behavior:
 
-**Errors** are signaled by `data: [ERROR] <message>`.
+| UI Element | Behavior |
+|---|---|
+| Header | Shows meal type (bữa sáng/trưa/tối/an vặt) with emoji and AI confidence badge |
+| Food item list | Each item shows name, per-unit macros, +/- quantity stepper |
+| Macro grid | Real-time totals: Calories (kcal), Protein (g), Carbs (g), Fat (g) — recalculates on every quantity change |
+| Confirm button | Calls `PATCH /nutrition/pending/{id}/confirm` with final `updated_data` |
+| Cancel button | Returns to idle phase without any API call |
+| Error banner | Shows HTTP error detail if confirm fails (e.g., BMR floor violation) |
+
+Frontend polling: `useMealConfirmation` hook polls `GET /nutrition/pending` every 2s, max 5 attempts. State machine: `idle → loading → has_data → confirming → confirmed → idle`.

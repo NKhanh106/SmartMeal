@@ -4,16 +4,40 @@ Multi-Agent Orchestrator.
 Routes every user message to the right specialist agents, runs them in
 parallel, and synthesizes a coherent response.
 
-Flow:
-1. Load shared context (memory, profile, history)
-2. Mark session needs_extraction = True (DB write)
-3. Enqueue ExtractorAgent task to Redis queue (deferred — runs AFTER request commit)
-4. Decide which specialist agents to run (keyword + memory-based routing)
-5. Run specialists IN PARALLEL (health, nutrition, fitness, research)
-6. Check if any agent suggests a clarification card → yield it and stop
-7. Build synthesis context from all agent results
-8. Call the final AI with synthesis context → stream response
-9. Drain proposals from Redis queue → emit via SSE
+Execution model (3-phase pipeline):
+
+  Phase 1 — HealthMonitor (sequential, blocking)
+    • Runs BEFORE any other agent for every request.
+    • Safety gate: if MH crisis detected → hard stop, no nutrition advice sent.
+    • Its AgentResult is immediately placed into context.agent_results so
+      Phase 2 agents read the health context as soon as it is available.
+
+  Phase 2 — Specialist agents (parallel, fire-and-forget SSE tokens)
+    • NutritionAdvisor, FitnessCoach, WebResearcher run concurrently.
+    • Each agent runs in its own isolated AsyncSession to avoid SQLAlchemy
+      concurrency violations. Memory writes are routed through MemoryWriteEngine
+      (single commit point after all Phase 2 agents complete).
+    • Results are emitted as SSE "event: agent_result\ndata: {...}\n\n" events
+      so the SMA-Eval benchmark runner can extract individual agent outputs.
+
+  Phase 3 — ExtractorAgent (fire-and-forget, Redis queue)
+    • Queued via Redis BRPOP after the HTTP response begins streaming.
+    • Runs OUTSIDE the request transaction — extracts meals from the chat
+      history and writes PENDING MealLog records for Frontend confirmation.
+    • Proposals are drained from Redis after the final AI response and
+      emitted as SSE "event: update_proposal" events.
+
+Full pipeline (deep/expert mode):
+  1. Load shared context (memory, profile, history)
+  2. Emit "event: depth\ndata: {...}\n\n"
+  3. Mark session needs_extraction = True
+  4. Enqueue ExtractorAgent task to Redis queue (deferred — runs AFTER request)
+  5. Route & run Phase 1 (HealthMonitor) — sequential, with timeout circuit
+  6. Run Phase 2 specialists IN PARALLEL — emit SSE agent_result events
+  7. Check for clarification card (anti-loop protection)
+  8. Build synthesis context from all agent results
+  9. Stream final AI response via SSE "data: {delta: ...}\n\n"
+ 10. Drain proposals from Redis → emit SSE "event: update_proposal\ndata: {...}\n\n"
 
 Safety: Health Monitor always runs first for health-related queries.
         No response is sent until at least health is assessed.
@@ -196,8 +220,9 @@ class MultiAgentOrchestrator:
         await self._mark_needs_extraction(session_id, session_factory)
 
         # Enqueue extractor to Redis queue. The queue worker processes extraction
-        # AFTER this request commits, eliminating the race where the background task
-        # wrote UserMemory while Phase 1 agents were still running.
+        # AFTER the HTTP response begins, eliminating the race where the background
+        # task wrote PENDING MealLog records while Phase 2 agents were still writing
+        # UserMemory (both would conflict if writing to the same transaction).
         from app.core.extractor_queue import extractor_enqueue
         await extractor_enqueue(
             user_id=str(user.id),
@@ -217,6 +242,8 @@ class MultiAgentOrchestrator:
                     yield f"event: card\ndata: {card.model_dump_json()}\n\n"
                 if safety_result.text_for_orchestrator.startswith("MENTAL HEALTH CRISIS"):
                     # Hard stop for mental health crisis — no nutrition advice
+                    # Emit the safety agent result for SMA-Eval before exiting
+                    yield f"event: agent_result\ndata: {json.dumps({'agent': 'health', 'success': safety_result.success, 'insight_type': safety_result.insight_type, 'confidence': safety_result.confidence, 'priority': safety_result.priority, 'text_for_orchestrator': safety_result.text_for_orchestrator, 'content': safety_result.content, 'error': safety_result.error}, ensure_ascii=False)}\n\n"
                     return
 
             safety_note = ""
@@ -399,6 +426,25 @@ class MultiAgentOrchestrator:
         # Commit all Phase 2 writes through the single MemoryWriteEngine
         if write_engine.has_pending():
             await write_engine.commit()
+
+        # ── Emit per-agent results as SSE events for SMA-Eval runner ──────────
+        # Each agent's structured output is serialised so the benchmark runner can
+        # extract individual NutritionAdvisor, FitnessCoach, and HealthMonitor results
+        # and pass them to InterAgentConsistencyMetric / TaskDecompositionQualityMetric.
+        for agent_key, result in agent_results.items():
+            if result is None:
+                continue
+            payload = {
+                "agent": agent_key,
+                "success": result.success,
+                "insight_type": result.insight_type,
+                "confidence": result.confidence,
+                "priority": result.priority,
+                "text_for_orchestrator": result.text_for_orchestrator,
+                "content": result.content,           # dict — parsed JSON from AI
+                "error": result.error,
+            }
+            yield f"event: agent_result\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
         # Step 5: Anti-loop check — block clarification cards if user just saw one
         clarification_blocked = await self._is_clarification_blocked(

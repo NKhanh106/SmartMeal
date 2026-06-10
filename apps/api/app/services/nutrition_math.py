@@ -176,7 +176,7 @@ def apply_goal_adjustment(tdee: float, bmr: float, goal_type: str) -> float:
     if goal == "deficit":
         adjustment = DEFICIT_CAL_ADJUSTMENT
         raw_target = tdee + adjustment
-        # FIX-9: Align math floor with data_writers.MIN_DAILY_CALORIES hard floor (1000)
+        # FIX-9: Align math floor with data_writers.MIN_DAILY_CALORIES hard floor (1000 kcal).
         clinical_min = max(raw_target, bmr * MINIMUM_CALORIE_FLOOR_FACTOR, 1000)
         return clinical_min
 

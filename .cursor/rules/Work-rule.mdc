@@ -1,4 +1,0 @@
----
-alwaysApply: true
----
-Always start every new task by re-reading the project structure and key files before writing code.

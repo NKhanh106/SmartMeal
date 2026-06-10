@@ -2,7 +2,7 @@
 
 ## Enterprise Multi-Agent Nutrition & Fitness Clinical Engineering System
 
-FastAPI backend powering SmartMeal — an asynchronous, high-concurrency orchestration layer that drives a custom **2-Phase parallel Multi-Agent framework**, delivering deterministic biochemical, behavioral, and biomechanically-restricted nutrition and fitness recommendations in Vietnamese.
+FastAPI backend powering SmartMeal — an asynchronous, high-concurrency orchestration layer that drives a custom **3-Phase multi-agent framework**, delivering deterministic biochemical, behavioral, and biomechanically-restricted nutrition and fitness recommendations in Vietnamese.
 
 ---
 
@@ -14,7 +14,7 @@ FastAPI backend powering SmartMeal — an asynchronous, high-concurrency orchest
 4. [Production Database Infrastructure](#4-production-database-infrastructure--connection-pooling)
 5. [Enterprise Security, Guardrails & Anti-Hallucination Matrix](#5-enterprise-security-guardrails--anti-hallucination-matrix)
 6. [Live Search Architecture](#6-live-search-architecture-webresearcheragent)
-7. [2-Phase Execution Topology — Internal Mechanics](#7-2-phase-execution-topology--internal-mechanics)
+7. [3-Phase Execution Topology — Internal Mechanics](#7-3-phase-execution-topology--internal-mechanics)
 8. [Configuration Reference](#8-configuration-reference)
 9. [Installation & Local Deployment](#9-installation--local-deployment)
 
@@ -22,7 +22,7 @@ FastAPI backend powering SmartMeal — an asynchronous, high-concurrency orchest
 
 ## 1. Technical Abstract
 
-SmartMeal API is a clinical-grade FastAPI application that orchestrates **6 specialized AI agents** to deliver personalized nutrition and fitness guidance. The system employs a **2-Phase execution topology**: Phase 1 gates all downstream agents with a mandatory Health Monitor clinical triage path; Phase 2 runs Nutrition Advisor, Fitness Coach, and Web Researcher in parallel isolation. Every agent writes through a **centralized `MemoryWriteEngine`** that enforces field-level ownership with deterministic row-level locking on PostgreSQL. The context-loading bottleneck was resolved by replacing 6 sequential `SELECT` queries with a single SQLAlchemy 2.0 eager-loaded `selectinload` query, crushing cold-start latency from ~250ms to ~20ms. A Redis-based async task queue eliminates races between the main request transaction and background extraction workers. All user input passes through a 4-step cryptographic sanitization pipeline before entering any prompt. Safety is enforced by a two-layer biomechanical defense: deterministic `SafetyMatrix` rule overrides before the LLM call, and substring-regex post-processing on LLM output regardless of model compliance.
+SmartMeal API is a clinical-grade FastAPI application that orchestrates **6 specialized AI agents** to deliver personalized nutrition and fitness guidance. The system employs a **3-Phase execution topology**: Phase 1 gates all downstream agents with a mandatory Health Monitor clinical triage path; Phase 2 runs Nutrition Advisor, Fitness Coach, and Web Researcher in parallel isolation; Phase 3 defers meal extraction to a Redis queue worker that writes PENDING MealLog records for frontend confirmation. Every agent writes through a **centralized `MemoryWriteEngine`** that enforces field-level ownership with `SELECT FOR UPDATE` row-level locking on PostgreSQL. The context-loading bottleneck was resolved by replacing 6 sequential `SELECT` queries with a single SQLAlchemy 2.0 eager-loaded `selectinload` query, crushing cold-start latency from ~250ms to ~20ms. A Redis-based async task queue eliminates races between the main request transaction and background extraction workers. All user input passes through a 4-step cryptographic sanitization pipeline before entering any prompt. Safety is enforced by a two-layer biomechanical defense: deterministic `SafetyMatrix` rule overrides before the LLM call, and substring-regex post-processing on LLM output regardless of model compliance.
 
 ---
 
@@ -57,7 +57,7 @@ SmartMeal API is a clinical-grade FastAPI application that orchestrates **6 spec
                     │  ─────────────────────────────────────────  │
                     │  ┌─────────────┐  ┌──────────────────┐    │
                     │  │ Nutrition   │  │ FitnessCoach     │    │
-                    │  │ Advisor     │  │ (SafetyMatrix     │    │
+                    │  │ Advisor    │  │ (SafetyMatrix    │    │
                     │  │ ─────────  │  │  overrides pre-  │    │
                     │  │ Mode A:     │  │  LLM + substring  │    │
                     │  │ Mifflin-St  │  │  regex post-      │    │
@@ -104,8 +104,8 @@ SmartMeal API is a clinical-grade FastAPI application that orchestrates **6 spec
 
 | Endpoint | Protocol | Use Case |
 |---|---|---|
-| `POST /api/v1/ai/chat/stream` | SSE (Server-Sent Events) | Full streaming AI response with agent analysis |
-| `POST /api/v1/ai/chat` | JSON | Non-streaming request (structured cards only) |
+| `POST /api/v1/ai/chat/sessions/{id}/messages/stream` | SSE (Server-Sent Events) | Full streaming AI response with 3-phase pipeline |
+| `PATCH /api/v1/nutrition/pending/{id}/confirm` | JSON | Confirm pending meal log (SELECT FOR UPDATE + BMR floor) |
 
 ---
 
@@ -115,11 +115,11 @@ SmartMeal API is a clinical-grade FastAPI application that orchestrates **6 spec
 
 | Agent Name | Authoritative Class & File Path | Trigger Condition / Routing Rules | Clinical Core Capabilities |
 |---|---|---|---|
-| **Orchestrator** | `MultiAgentOrchestrator` — `app/agents/multi_agent_orchestrator.py` | Keyword-based microsecond dispatch on `HEALTH_KEYWORDS`, `NUTRITION_KEYWORDS`, `FITNESS_KEYWORDS`, `RESEARCH_TRIGGERS`; also triggers on active unresolved health events | 2-Phase routing engine: sequential Phase 1 gate, parallel Phase 2 isolation; anti-loop clarification protection via Redis TTL; `MemoryWriteEngine` centralized write coordination; final Groq synthesis with 1500-token budgeted context |
+| **Orchestrator** | `MultiAgentOrchestrator` — `app/agents/multi_agent_orchestrator.py` | Keyword-based microsecond dispatch on `HEALTH_KEYWORDS`, `NUTRITION_KEYWORDS`, `FITNESS_KEYWORDS`, `RESEARCH_TRIGGERS`; also triggers on active unresolved health events | 3-Phase routing engine: sequential Phase 1 gate (HealthMonitor), parallel Phase 2 isolation (NutritionAdvisor/FitnessCoach/WebResearcher), fire-and-forget Phase 3 (ExtractorAgent via Redis queue); emits `event: agent_result` SSE for SMA-Eval benchmark; anti-loop clarification protection via Redis TTL; `MemoryWriteEngine` centralized write coordination; final Groq synthesis with 1500-token budgeted context |
 | **Extractor** | `ExtractorAgent` — `app/agents/extractor_agent.py` | Deferred async execution via Redis BRPOP queue (runs after request commits); never runs inline with user request | Silent text-to-meal extraction (food names, calories, macros); text-to-health-events; key facts upsert; body snapshot merge; session summarization at 5+ messages; `ConversationInsight` SQL table upsert; `UpdateProposal` generation |
-| **Health Monitor** | `HealthMonitorAgent` — `app/agents/health_monitor_agent.py` | Triggered when user message contains Vietnamese health keywords (`mệt`, `đau`, `tiêu chảy`, `chóng mặt`, etc.) OR when `UserMemory.health_events` has unresolved events | Phase 1 gatekeeper — MUST complete before any Phase 2 agent runs; rule-based urgent keyword scan with negation pattern matching (9 regex patterns); third-person report detection (14 Vietnamese family-relationship indicators); structured JSON health assessment (overall, energy, digestion, musculoskeletal, metabolic); fitness clearance output feeding SafetyMatrix; recovery event auto-resolution via keyword matching |
-| **Nutrition Advisor** | `NutritionAdvisorAgent` — `app/agents/nutrition_advisor_agent.py` | Triggered on food/nutrition keywords OR fallback rule (messages < 30 chars get NutritionAdvisor to ensure response) | Two-path architecture: **Mode A** — algorithmic Mifflin-St Jeor macro calculator injected into prompt before LLM (BMR → TDEE → target calories → protein/carbs/fat); **Mode B** — behavioral clinical psychology analysis triggered by 17-pattern classifier (skipping meals, late-night eating, emotional sweet/savory, binge eating, disordered eating) with root-cause physiological explanation, empathy-first language, harm-reduction alternatives, and max 2 trigger-focused clarifying questions; allergen verification on all suggestions; clarification card emission for intent ambiguity (2–4 options) |
-| **Fitness Coach** | `FitnessCoachAgent` — `app/agents/fitness_coach_agent.py` | Triggered on fitness keywords (`tập`, `gym`, `cardio`, `workout`, `bài tập`, etc.) | Two-layer biomechanical safety: **Layer 1** (pre-LLM) — `SafetyMatrix` deterministic exercise blocks from injury regions; **Layer 2** (post-LLM) — substring regex enforcement purges any escaped forbidden exercise from LLM output; illness-severity forced rest (`rest` type with empty exercises list); workout type decision tree based on clearance codes; workout recommendation JSON schema with `avoid_exercises`, `alternative_exercises`, `recovery_focus`, `schedule_adjustment` |
+| **Health Monitor** | `HealthMonitorAgent` — `app/agents/health_monitor_agent.py` | Triggered when user message contains Vietnamese health keywords (`mệt`, `đau`, `tiêu chảy`, `chóng mặt`, etc.) OR when `UserMemory.health_events` has unresolved events | Phase 1 gatekeeper — MUST complete before any Phase 2 agent runs; rule-based urgent triage (8 keyword phrases) + negation + third-person filtering; `MENTAL_HEALTH_CRISIS_KEYWORDS` hard-stop; structured JSON health assessment (overall, energy, digestion, musculoskeletal, metabolic); fitness clearance output feeding SafetyMatrix; recovery event auto-resolution via keyword matching |
+| **Nutrition Advisor** | `NutritionAdvisorAgent` — `app/agents/nutrition_advisor_agent.py` | Triggered on food/nutrition keywords OR fallback rule (messages < 30 chars get NutritionAdvisor to ensure response) | Two-path architecture: **Mode A** — algorithmic Mifflin-St Jeor macro calculator injected into prompt before LLM (BMR → TDEE → target calories ≥ 1.0 × BMR floor → protein/carbs/fat); **Mode B** — behavioral clinical psychology analysis triggered by 17-pattern classifier (skipping meals, late-night eating, emotional sweet/savory, binge eating, disordered eating) with root-cause physiological explanation, empathy-first language, harm-reduction alternatives, and max 2 trigger-focused clarifying questions; allergen verification on all suggestions; clarification card emission for intent ambiguity (2–4 options) |
+| **Fitness Coach** | `FitnessCoachAgent` — `app/agents/fitness_coach_agent.py` | Triggered on fitness keywords (`tập`, `gym`, `cardio`, `workout`, `bài tập`, etc.) | Two-layer biomechanical safety: **Layer 1** (pre-LLM) — `SafetyMatrix` deterministic exercise blocks from injury regions; blocks HIIT/Tabata for users >= 65 years or with `is_elderly` flag; **Layer 2** (post-LLM) — substring regex enforcement purges any escaped forbidden exercise from LLM output; illness-severity forced rest (`rest` type with empty exercises list); workout type decision tree based on clearance codes; workout recommendation JSON schema with `avoid_exercises`, `alternative_exercises`, `recovery_focus`, `schedule_adjustment` |
 | **Web Researcher** | `WebResearcherAgent` — `app/agents/web_researcher_agent.py` | On-demand only — triggered by research keywords (`mới nhất`, `nghiên cứu`, `có thật không`, `khoa học`, `bằng chứng`, etc.) OR low-confidence topics (supplements, keto, intermittent fasting, etc.) | Real-first architecture: `AsyncTavilyClient` with domain whitelist (14 medical/trust nodes); `advanced` search depth; trusted source tiering (Tier 1: PubMed/WHO/CDC/Mayo/NIH; Tier 2: Healthline/Examine.com/Vinmec; Tier 3: SuckhoeDoiSong/BacSiDanang/WebMD); Redis atomic cache with 24h TTL per query per day; rate limit: 3 searches/user/day via `AgentRun` table count; automated `_ai_synthesis_fallback` with explicit `ai_synthesis_disclaimer` label when Tavily is unavailable or exhausted |
 
 ---
@@ -135,12 +135,12 @@ The system separates database connections into two tiers to prevent DDL locking 
 │                    Supabase Cloud PostgreSQL                      │
 │  ┌───────────────────────┐    ┌────────────────────────────┐  │
 │  │  Direct Connection     │    │  PgBouncer Pooled (port    │  │
-│  │  Port 5432            │    │  6543, transaction mode)    │  │
-│  │  ─────────────────    │    │  ────────────────────────    │  │
-│  │  DATABASE_URL         │    │  DATABASE_POOL_URL          │  │
-│  │  (pgbouncer=false)   │    │  (?pgbouncer=true)          │  │
-│  │  Reserved: Alembic     │    │  FastAPI runtime only        │  │
-│  │  migrations ONLY       │    │  ⚠️ pool_pre_ping=DISABLED  │  │
+│  │  Port 5432           │    │  6543, transaction mode)     │  │
+│  │  ─────────────────    │    │  ────────────────────────   │  │
+│  │  DATABASE_URL         │    │  ASYNC_DATABASE_POOL_URL   │  │
+│  │  (pgbouncer=false)   │    │  (?pgbouncer=true)         │  │
+│  │  Reserved: Alembic    │    │  FastAPI runtime only       │  │
+│  │  migrations ONLY       │    │  ⚠️ pool_pre_ping=DISABLED │  │
 │  └───────────────────────┘    └────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -151,9 +151,9 @@ The system separates database connections into two tiers to prevent DDL locking 
 
 ```python
 pool_size=4          # Per-worker base connections
-max_overflow=12      # Per-worker burst ceiling: 4 + 12 = 16
-pool_recycle=1800    # 30 min — PgBouncer sessions expire at 60 min idle
-pool_pre_ping=False  # PURPOSEFULLY DISABLED — prevents PgBouncer tx pollution
+max_overflow=8      # Per-worker burst ceiling: 4 + 8 = 12
+pool_recycle=1800   # 30 min — PgBouncer sessions expire at 60 min idle
+pool_pre_ping=False # PURPOSEFULLY DISABLED — prevents PgBouncer tx pollution
 # Prepared statement cache disabled for asyncpg compatibility
 connect_args={
     "statement_cache_size": 0,
@@ -161,7 +161,17 @@ connect_args={
 }
 ```
 
-**Per-worker ceiling:** 16 connections × 4 workers = **64 max** (intentionally tight to Supabase free-tier 60-connection limit — adjust overflow or worker count for larger deployments).
+**Per-worker ceiling:** 4 + 8 = 12 connections × 4 workers = **48 max** (well within Supabase free-tier 60-connection limit — leaves 12 connections of safety margin for migrations and direct queries).
+
+### Background Concurrency Bounding
+
+The background task semaphore limits concurrent fire-and-forget tasks to prevent DB pool exhaustion:
+
+```python
+BACKGROUND_TASK_CONCURRENCY_LIMIT = 4  # Per worker — matches pool_size
+```
+
+Each Uvicorn worker has its own `BACKGROUND_TASK_SEMAPHORE`. The `extractor_queue_worker_loop()` runs as one tracked background task, consuming 1 semaphore slot while blocked on BRPOP.
 
 ### The N+1 Query Resolution (`app/agents/context_loader.py`)
 
@@ -227,7 +237,7 @@ The `FitnessCoachAgent` employs a **two-layer defense system** that operates reg
 
 **Layer 1 — Pre-LLM Deterministic Gate (`SafetyMatrix.evaluate()`)**
 
-The `SafetyMatrix` class reads injury data from `HealthMonitorAgent` Phase 1 output and produces mandatory exercise blocks. The matrix covers **5 body regions × 6 region-specific block sets**:
+The `SafetyMatrix` class reads injury data from `HealthMonitorAgent` Phase 1 output and produces mandatory exercise blocks. The matrix covers **6 body regions × 6 region-specific block sets**:
 
 | Body Region | Blocked Exercises | Safe Alternatives |
 |---|---|---|
@@ -237,6 +247,8 @@ The `SafetyMatrix` class reads injury data from `HealthMonitorAgent` Phase 1 out
 | Wrist / Hand (`_WRIST_MATRIX`) | Push-up, Plank, Bench Press | Knee Push-up, Wall Push-up, Dumbbell Press, Machine Chest Press |
 | Hip (`_HIP_MATRIX`) | Deadlift, Lunge, Hip Thrust nặng | Glute Bridge bodyweight, Clamshell, Goblet Squat |
 | Illness / Cardio-limited (`_CARDIO_LIMITED`) | Running, HIIT, Burpee | Đi bộ nhẹ, Đạp xe chậm, Yoga stretch, Thở diaphragmatic |
+
+**Elderly guardrail:** Users >= 65 years old have HIIT and Tabata exercises blocked by the orchestrator's demographic flag detection (`detect_sensitive_demographics()`), independent of SafetyMatrix.
 
 Severity evaluation uses **mitigating qualifier** detection: phrases like `nhẹ`, `hơi`, `vừa`, `mild`, `hồi phục` reduce severe keywords to mild restrictions instead of forced rest.
 
@@ -341,9 +353,9 @@ timeout=10.0,
 
 ---
 
-## 7. 2-Phase Execution Topology — Internal Mechanics
+## 7. 3-Phase Execution Topology — Internal Mechanics
 
-### Phase 1: Sequential Health Clearance (`app/agents/multi_agent_orchestrator.py`, lines 249–281)
+### Phase 1: Sequential Health Clearance (`multi_agent_orchestrator.py`)
 
 ```
 Phase 1 always runs first — no Phase 2 agent is dispatched until Phase 1 completes.
@@ -355,19 +367,20 @@ Flow:
 2. HealthMonitorAgent().run(context, db)
    → asyncio.wait_for(timeout=depth_config.phase1_timeout)
    → depth_config.phase1_timeout: quick=0, deep=3.0s, expert=5.0s
+   → MH crisis detected → hard stop, yield card + agent_result, return
 
 3. On success: context.agent_results["health"] = health_result
    → apply_memory_updates("health_monitor", memory_updates, db)
+   → emit "event: agent_result\ndata: {...}\n\n" via SSE
 
 4. On timeout/exception: _make_health_fallback(reason)
    → Returns conservative AgentResult with confidence=0.0
-   → Synthesized into response with "⚠️ Health assessment unavailable" note
 
 5. Initial session closed: await db.close()
    → All subsequent DB operations use session_factory (isolated sessions)
 ```
 
-### Phase 2: Parallel Isolation (`app/agents/multi_agent_orchestrator.py`, lines 283–373)
+### Phase 2: Parallel Specialist Isolation (`multi_agent_orchestrator.py`)
 
 ```
 Phase 2 dispatch: each agent runs in its own AsyncSession
@@ -378,11 +391,48 @@ Each Phase 2 agent:
   → Returns AgentResult with memory_updates dict
   → Orchestrator routes memory_updates through MemoryWriteEngine
   → MemoryWriteEngine.commit() is the SINGLE write point after Phase 2
+  → Emits "event: agent_result\ndata: {...}\n\n" via SSE
 
 DEEP mode disambiguation rule:
   if should_run_nutrition AND should_run_fitness:
       should_run_fitness = False  # nutrition takes priority in deep mode
 ```
+
+### Phase 3: ExtractorAgent — Fire-and-Forget via Redis Queue (`background.py`)
+
+```
+Orchestrator.process()
+    │
+    ▼
+create_tracked_task() ──► LPUSH task JSON to Redis extractor_queue
+    │
+    ▼
+HTTP response begins streaming
+
+extractor_queue_worker_loop()  ← runs in background, separate from request
+    │
+    ▼
+BRPOP timeout=5s  ◄── blocks until task available
+    │
+    ▼
+ExtractorAgent.run()
+    ├─► Groq AI → meal extraction JSON
+    ├─► MemoryWriteEngine.apply("extractor", memory_updates)
+    └─► Create MealLog with status=PENDING (calories=0, awaiting confirmation)
+
+    ├─► extractor_enqueue_proposal(SETEX TTL=600s)
+    └─► db.commit()
+
+On NEXT request (or end of stream):
+    │
+    ▼
+extractor_drain_proposals(SCAN + GETDEL pipeline)
+    │
+    ▼
+yield "event: update_proposal\ndata: {...}\n\n"
+```
+
+**Anti-race guarantee:** The queue worker runs AFTER the HTTP response begins, entirely outside the main request transaction. ExtractorAgent writes PENDING MealLogs while Phase 2 agents write UserMemory — both in separate transactions, no conflict.
 
 ### Centralized Write Engine (`app/agents/memory_service.py`)
 
@@ -393,7 +443,7 @@ DEEP mode disambiguation rule:
   body_snapshot        → health_monitor
   health_events        → health_monitor
   nutrition_memory     → nutrition_advisor
-  fitness_memory       → fitness_coach
+  fitness_memory        → fitness_coach
   key_facts            → extractor
   conversation_summary → extractor
   recent_meals         → extractor
@@ -469,11 +519,11 @@ DAILY_PLAN_CACHE_TTL=43200
 | Setting | Value | Purpose |
 |---|---|---|
 | `DATABASE_POOL_SIZE` | 4 | Per-worker base connections |
-| `DATABASE_MAX_OVERFLOW` | 12 | Per-worker burst ceiling (16 total) |
+| `DATABASE_MAX_OVERFLOW` | 8 | Per-worker burst ceiling (12 total per worker) |
 | `DATABASE_POOL_TIMEOUT` | 30 | Seconds to wait for a connection |
 | `DATABASE_POOL_RECYCLE` | 1800 | 30 min — PgBouncer idle timeout is 60 min |
 | `DATABASE_POOL_PRE_PING` | `False` | **Intentionally disabled** — prevents PgBouncer transaction pollution |
-| `BACKGROUND_TASK_CONCURRENCY_LIMIT` | 4 | Bounded semaphore for all fire-and-forget tasks |
+| `BACKGROUND_TASK_CONCURRENCY_LIMIT` | 4 | Bounded semaphore for all fire-and-forget tasks (matches pool_size per worker) |
 
 ---
 
@@ -572,7 +622,7 @@ curl http://localhost:8000/api/v1/health
 
 | File | Purpose |
 |---|---|
-| `app/agents/multi_agent_orchestrator.py` | Central routing engine — 2-phase execution, keyword dispatch, anti-loop |
+| `app/agents/multi_agent_orchestrator.py` | Central routing engine — 3-phase execution, keyword dispatch, anti-loop |
 | `app/agents/extractor_agent.py` | Silent information extraction — meals, health events, facts, proposals |
 | `app/agents/health_monitor_agent.py` | Clinical triage — Phase 1 gatekeeper, urgent keyword scan, fitness clearance |
 | `app/agents/nutrition_advisor_agent.py` | Mode A macro calculator + Mode B behavioral empathy classifier |
@@ -587,6 +637,11 @@ curl http://localhost:8000/api/v1/health
 | `app/core/background.py` | Semaphore-bounded background tasks + queue worker loop |
 | `app/core/cache.py` | Redis cache abstraction with graceful degradation |
 | `app/ai/circuit_breaker.py` | CLOSED / OPEN / HALF_OPEN circuit breaker per AI provider |
-| `app/db/session.py` | SQLAlchemy 2.0 async engine with PgBouncer-safe pool config |
+| `app/db/session.py` | SQLAlchemy 2.0 async engine with PgBouncer-safe pool config (`pool_size=4`, `max_overflow=8`) |
 | `app/core/config.py` | Pydantic settings — dual DB URL, pool metrics, production validators |
-| `app/agents/data_writers.py` | UpdateProposal record writers with biomedical floor/ceiling validation |
+| `app/api/v1/nutrition.py` | Pending state API: `GET /nutrition/pending` + `PATCH /nutrition/pending/{id}/confirm` |
+| `app/services/meal_service.py` | `confirm_pending_meal_log()` with `SELECT FOR UPDATE`, negative clamp, BMR floor enforcement |
+| `app/services/nutrition_math.py` | Mifflin-St Jeor BMR/TDEE calculator; `MINIMUM_CALORIE_FLOOR_FACTOR = 1.0` |
+| `tests/sma_eval/runner.py` | SMA-Eval v1 benchmark runner with ablation study support |
+| `tests/sma_eval/metrics.py` | 7-domain metric suite: AVR, NCV, MAE/MAPE, IAC, RFS, + role adherence + task decomposition |
+| `tests/sma_eval/reporter.py` | CHAS v2 calculator + Markdown/HTML report generation |

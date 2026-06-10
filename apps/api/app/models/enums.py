@@ -52,6 +52,12 @@ class MealLogSourceType(str, enum.Enum):
     chat_extraction = "chat_extraction"
     chat_command = "chat_command"
 
+
+class MealLogStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
 class WorkoutDifficultyType(str, enum.Enum):
     nguoi_moi = "nguoi_moi"
     trung_binh = "trung_binh"

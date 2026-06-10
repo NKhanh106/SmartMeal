@@ -22,8 +22,9 @@ engine = create_async_engine(
     settings.ASYNC_DATABASE_POOL_URL,
     echo=False,
     future=True,
-    # FIX-8 (C-1): max_overflow raised from 6 to 12 per worker.
-    # Total ceiling: 4 workers × (pool_size=4 + max_overflow=12) = 64.
+    # FIX-8 (C-1): pool_size=4, max_overflow=12 per worker.
+    # Per-worker ceiling: 4 + 12 = 16 connections.
+    # 4 workers × 16 = 64 max — safely below Supabase free tier (60).
     pool_size=4,
     max_overflow=12,
     pool_timeout=settings.DATABASE_POOL_TIMEOUT,

@@ -20,6 +20,7 @@ from app.api.v1 import (
     dashboard,
     food_nutrition,
     meal_logs,
+    nutrition,
     nutrition_goals,
     progress_logs,
     user_profiles,
@@ -151,6 +152,7 @@ app.include_router(user_profiles.router, prefix=settings.API_V1_STR)
 app.include_router(nutrition_goals.router, prefix=settings.API_V1_STR)
 app.include_router(food_nutrition.router, prefix=settings.API_V1_STR)
 app.include_router(meal_logs.router, prefix=settings.API_V1_STR)
+app.include_router(nutrition.router, prefix=settings.API_V1_STR)
 app.include_router(dashboard.router, prefix=settings.API_V1_STR)
 app.include_router(progress_logs.router, prefix=settings.API_V1_STR)
 app.include_router(workout_plans.router, prefix=settings.API_V1_STR)

@@ -14,13 +14,60 @@ Next.js 15 (Web)
 FastAPI (API)
      ↕
 Multi-Agent Orchestrator
-  ├── Extractor Agent      → UserMemory (PostgreSQL JSONB)
-  ├── Health Monitor        → AgentInsight
-  ├── Nutrition Advisor     → MealLog
-  ├── Fitness Coach         → WorkoutPlan
-  └── Web Researcher       → Cached findings (Redis)
+  ├── Phase 1: HealthMonitor        → Urgent triage, medical emergency gate
+  ├── Phase 2: NutritionAdvisor   → Mifflin-St Jeor macro calculator
+  ├── Phase 2: FitnessCoach       → Biomechanical safety overrides
+  ├── Phase 2: WebResearcher      → Real-first web search (Tavily)
+  └── Phase 3: ExtractorAgent     → Fire-and-forget (Redis queue)
      ↕
-PostgreSQL 16 + Redis 7 + Alembic
+PostgreSQL 16 + Redis 7 + PgBouncer + Alembic
+```
+
+### Three-Phase Pipeline
+
+| Phase | Agents | Concurrency | Timing |
+|---|---|---|---|
+| Phase 1 | HealthMonitorAgent | Sequential | Blocks all Phase 2 until complete |
+| Phase 2 | NutritionAdvisor, FitnessCoach, WebResearcher | Parallel | After Phase 1 completes |
+| Phase 3 | ExtractorAgent | Fire-and-forget | After HTTP response begins |
+
+### Pending State Lifecycle
+
+When users chat about meals, the system silently extracts structured data and stores it for user confirmation:
+
+```
+User Message
+    │
+    ▼
+create_tracked_task() ──► LPUSH to Redis extractor_queue
+    │
+    ▼
+HTTP Response begins streaming (main connection closes)
+    │
+    ▼
+extractor_queue_worker_loop() ──► BRPOP blocks on queue
+    │
+    ▼
+ExtractorAgent parses chat → structured JSON
+    │
+    ▼
+MealLog written with status = PENDING (calories=0, awaiting confirmation)
+    │
+    ▼
+Frontend polls GET /nutrition/pending
+    │
+    ▼
+MealConfirmationCard renders (quantity +/- stepper, macro totals)
+    │
+    ▼
+User clicks [✓ Xác nhận lưu]
+    │
+    ▼
+PATCH /nutrition/pending/{id}/confirm
+    ├─ SELECT FOR UPDATE (row-level lock)
+    ├─ Per-item negative clamp (calories ≥ 0)
+    ├─ BMR floor enforcement (total ≥ BMR × 1.0)
+    └─ status → APPROVED, totals recalculated
 ```
 
 ## Tech Stack
@@ -34,11 +81,25 @@ PostgreSQL 16 + Redis 7 + Alembic
 | Language | Python | 3.12 |
 | ORM | SQLAlchemy (async) | 2.0 |
 | Database | PostgreSQL | 16 |
+| Connection Pool | PgBouncer (transaction mode) | — |
 | Cache | Redis | 7 |
 | AI | Groq API + Google Gemini | — |
 | Auth | JWT + bcrypt | — |
 | Migrations | Alembic | — |
 | Containers | Docker + Docker Compose | — |
+
+## Database Connection Architecture
+
+SmartMeal uses a **dual-connection topology** to work safely with Supabase's PgBouncer in transaction mode:
+
+| Port | Connection | Consumer | Notes |
+|---|---|---|---|
+| 5432 | Direct PostgreSQL | Alembic migrations | Bypasses PgBouncer |
+| 6543 | PgBouncer pooled | FastAPI runtime | `pool_size=4`, `max_overflow=12` |
+
+**Per-worker ceiling:** 4 + 12 = 16 connections × 4 workers = **64 max** (within Supabase free tier 60-connection limit).
+
+`pool_pre_ping` is intentionally **disabled** — a health check on a PgBouncer-inactive connection would cause PgBouncer to drop the transaction.
 
 ## Project Structure
 
@@ -47,30 +108,31 @@ SmartMeal/
 ├── apps/
 │   ├── api/          # FastAPI backend
 │   │   ├── app/
-│   │   │   ├── agents/         # Multi-agent AI system
+│   │   │   ├── agents/         # Multi-agent AI system (6 agents, 3-phase pipeline)
 │   │   │   ├── api/v1/         # REST API endpoints
-│   │   │   ├── core/           # Config, security, cache
-│   │   │   ├── models/          # SQLAlchemy ORM models
-│   │   │   ├── schemas/         # Pydantic request/response
-│   │   │   ├── services/        # Business logic layer
+│   │   │   ├── core/           # Config, security, cache, queue
+│   │   │   ├── models/         # SQLAlchemy ORM models
+│   │   │   ├── schemas/        # Pydantic request/response
+│   │   │   ├── services/       # Business logic layer
 │   │   │   ├── chatbot/         # Chat pipeline (cards, triggers, context)
-│   │   │   ├── db/              # DB session management
-│   │   │   └── main.py          # FastAPI app entry point
-│   │   ├── migrations/          # Alembic migration scripts
+│   │   │   ├── db/             # DB session management
+│   │   │   └── ai/             # AI provider abstraction + circuit breaker
+│   │   ├── migrations/         # Alembic migration scripts
 │   │   ├── scripts/             # Seed data, utilities
-│   │   └── tests/               # pytest test suite
+│   │   └── tests/              # pytest test suite
+│   │       └── sma_eval/       # SMA-Eval v1 benchmark suite
 │   │
 │   └── web/           # Next.js 15 frontend
 │       └── src/
 │           ├── app/             # Next.js pages (App Router)
-│           ├── components/       # React components
+│           ├── components/       # React components + chatbot UI
 │           ├── hooks/           # Custom React hooks
-│           ├── services/        # API client functions
-│           └── lib/             # Utilities, types, constants
+│           ├── services/       # API client functions
+│           └── lib/            # Utilities, types, constants
 │
 ├── docker-compose.yml  # Local development stack
-├── .env.example        # Environment template
-└── README.md           # This file
+├── .env.example      # Environment template
+└── README.md         # This file
 ```
 
 ## Getting Started
@@ -108,10 +170,11 @@ cp apps/api/.env.example apps/api/.env
 cp apps/web/.env.example apps/web/.env.local
 ```
 
-3. **Run database migrations**
+3. **Run database migrations (always use direct port 5432)**
 
 ```bash
 cd apps/api
+# Use direct connection — never run migrations through PgBouncer
 alembic upgrade head
 ```
 
@@ -148,7 +211,9 @@ After running `seed_demo_data.py`:
 
 | Variable | Description |
 |----------|-------------|
-| `DATABASE_URL` | PostgreSQL connection string |
+| `DATABASE_URL` | PostgreSQL connection string (for runtime — uses PgBouncer port 6543) |
+| `MIGRATION_DATABASE_URL` | Direct PostgreSQL for Alembic (port 5432, bypasses PgBouncer) |
+| `DATABASE_POOL_URL` | Pooled connection string for FastAPI runtime |
 | `REDIS_URL` | Redis connection string |
 | `SECRET_KEY` | JWT signing key (32+ chars in production) |
 | `ALGORITHM` | JWT algorithm (default: HS256) |
@@ -191,12 +256,48 @@ Docs are disabled in production (`ENVIRONMENT=production`).
 ## Testing
 
 ```bash
-# Backend tests
+# Backend unit tests
 cd apps/api && python -m pytest tests/ -q
+
+# SMA-Eval v1 benchmark suite
+cd apps/api && python -m tests.sma_eval.runner --config full
 
 # TypeScript check
 cd apps/web && npx tsc --noEmit
 ```
+
+## SMA-Eval v1 — Multi-Agent Benchmark
+
+The benchmark suite evaluates the SmartMeal Multi-Agent system across three tiers of data:
+
+| Tier | Name | Scope |
+|---|---|---|
+| **A** | Hard Constraints | Biomedical rules, age boundaries, calorie floors, allergen blocking |
+| **B** | Reasoning & Consistency | Cross-agent conflicts, recipe feasibility, inter-agent consistency |
+| **C** | Infrastructure Stress | Burst load, concurrent requests, pool survival |
+
+Results are aggregated using **CHAS v2** (Composite Health & Agent Score):
+
+```
+CHAS v2 = (Safety_Score × 0.40) + (Quality_Score × 0.35) + (Performance_Score × 0.25)
+
+Safety_Score    = avg(AllergenViolation, NutritionalConstraint)
+Quality_Score   = avg(NutritionalEstimationMAE, InterAgentConsistency, RecipeFeasibility)
+Performance_Score = f(latency_ms, pool_survival_rate, throughput_rps)
+```
+
+Run the full benchmark:
+
+```bash
+cd apps/api
+python -m tests.sma_eval.runner --config full --output results.json
+
+# Ablation studies
+python -m tests.sma_eval.runner --config baseline
+python -m tests.sma_eval.runner --config partial --ablation-block health_monitor
+```
+
+See `apps/api/tests/sma_eval/README.md` for full documentation.
 
 ## License
 

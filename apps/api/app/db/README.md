@@ -1,4 +1,4 @@
-# `app/db/` — Database Layer & Schema Registry
+# `app/db/` — Database Layer, Session Management & Concurrency Strategy
 
 ## Module Overview & Domain Boundaries
 
@@ -7,46 +7,61 @@ This folder governs all **database interaction primitives** for SmartMeal:
 - **Async SQLAlchemy engine** and session factory, configured for Supabase PostgreSQL with PgBouncer in transaction mode.
 - **`Base` DeclarativeBase** — the single declarative root that all ORM models inherit from.
 - **`get_db()` dependency** — FastAPI `Depends()`-compatible async session provider with automatic rollback on exception.
+- **Pool checkout monitoring** — `event.listens_for` hook logs pool saturation at 80% threshold.
 - **Exercise seed data** — one-time seeding script for the `exercises` table.
 
-Routing is split by lifecycle:
+---
 
-| Port | Consumer | Connection Path |
-|---|---|---|
-| 6543 | Application runtime (`AsyncSessionLocal`) | PgBouncer (transaction mode) |
-| 5432 | Alembic migrations | Direct PostgreSQL |
+## 1. Dual-Connection Topology (Supabase PostgreSQL)
+
+SmartMeal separates database connections into **two distinct tiers** to safely operate behind Supabase's PgBouncer in transaction mode:
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│               Supabase Cloud PostgreSQL                              │
+│  ┌─────────────────────────┐    ┌──────────────────────────────┐  │
+│  │  Direct Connection        │    │  PgBouncer Pooled (port    │  │
+│  │  Port 5432              │    │  6543, transaction mode)    │  │
+│  │  ─────────────────────  │    │  ─────────────────────────  │  │
+│  │  DATABASE_URL            │    │  DATABASE_POOL_URL          │  │
+│  │  (pgbouncer=false)     │    │  (?pgbouncer=true)          │  │
+│  │  Alembic Migrations ONLY│    │  FastAPI Runtime ONLY       │  │
+│  └─────────────────────────┘    └──────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+| Port | Connection String | Consumer | PgBouncer Layer |
+|------|-----------------|----------|-----------------|
+| **5432** | `DATABASE_URL` / `ASYNC_DATABASE_URL` | Alembic migrations | Direct — bypasses PgBouncer entirely |
+| **6543** | `ASYNC_DATABASE_POOL_URL` | FastAPI application runtime | Behind PgBouncer (transaction mode) |
+
+### Why Two Ports?
+
+Supabase's free tier uses PgBouncer as a connection pooler in **transaction mode**. Key constraints:
+
+- **Transaction mode**: `SET` statements do **not persist** across transactions — session state is reset per transaction.
+- **Prepared statements are per-connection** — cannot be shared; `statement_cache_size = 0` is **mandatory**.
+- **DDL operations** (Alembic migrations) are **incompatible with transaction mode** — they must connect directly on port 5432.
+- **`pool_pre_ping=False` is intentional** — a health-check ping on a PgBouncer-inactive connection causes PgBouncer to mark that connection dead and drop the in-flight transaction.
 
 ---
 
-## File Registry & Critical Path Map
-
-| File Path | Authoritative Component / Class | Inbound Dependencies | Core Technical Responsibility |
-|---|---|---|---|
-| `__init__.py` | — | — | SmartMeal database package marker (empty) |
-| `session.py` | `engine`, `AsyncSessionLocal`, `get_db()`, `Base`, `POOL_WARNING_THRESHOLD` | `settings.ASYNC_DATABASE_POOL_URL` | Async SQLAlchemy engine (PgBouncer port 6543); pool_size=4, max_overflow=12; `statement_cache_size=0`; `expire_on_commit=False`; pool checkout monitoring |
-| `seeds/__init__.py` | — | — | Seeds package marker (empty) |
-| `seeds/seed_exercises.py` | `seed_exercises()`, `EXERCISES_DATA` | `app.models.exercise.Exercise` | One-time seed of 56 bodyweight exercises across 3 goal types; run via `python -m app.db.seeds.seed_exercises` |
-
----
-
-## Local Invariants & Production Logic Rules
-
-### Async Engine Configuration
+## 2. Verified Pool Configuration (`app/db/session.py`)
 
 ```python
-create_async_engine(
+engine = create_async_engine(
     settings.ASYNC_DATABASE_POOL_URL,   # Supabase: host:6543 (PgBouncer)
-    pool_size=4,                        # FIX-8: raised from 2 to 4
-    max_overflow=12,                     # FIX-8: raised from 6 to 12
-    pool_timeout=settings.DATABASE_POOL_TIMEOUT,
-    pool_recycle=settings.DATABASE_POOL_RECYCLE,   # 1800 s (30 min)
-    pool_pre_ping=settings.DATABASE_POOL_PRE_PING,  # False — PgBouncer handles health
+    pool_size=4,                     # FIX-8 (C-1): Per-worker base connections
+    max_overflow=12,                 # FIX-8 (C-1): Per-worker burst ceiling
+    pool_timeout=30,                # Wait up to 30s for a connection
+    pool_recycle=1800,              # 30 min — PgBouncer idle timeout = 60 min
+    pool_pre_ping=False,             # DISABLED — prevents PgBouncer tx pollution
     connect_args={
         "server_settings": {
             "application_name": "smartmeal_backend",
         },
-        "statement_cache_size": 0,       # Required: asyncpg + PgBouncer compat
-        "max_cached_statement_lifetime": 0,
+        "statement_cache_size": 0,           # Required for asyncpg + PgBouncer
+        "max_cached_statement_lifetime": 0,   # Required for asyncpg + PgBouncer
     },
 )
 ```
@@ -54,36 +69,40 @@ create_async_engine(
 ### Pool Sizing Mathematics
 
 ```
-pool_size per worker      = 4
-max_overflow per worker   = 12
+pool_size per worker         = 4
+max_overflow per worker    = 12
 ─────────────────────────────────
-Max connections per worker = 16
-Workers                   = 4
+Max connections per worker  = 16
+Workers                  = 4
 ─────────────────────────────────
-Total max connections     = 64
-PgBouncer max_connections = 80  (configured in docker-compose.yml)
+Total max connections     = 64 connections
+PgBouncer max_connections = 80 (configured in docker-compose.yml)
+Supabase Free Tier limit  = 60 connections
+─────────────────────────────────
+Headroom                 = 16 spare connections
 ```
 
-### PgBouncer Transaction Mode Constraints
+> **FIX-8 (C-1) note**: The ceiling of 64 total connections is intentionally tight to the Supabase free-tier limit of 60. Increase `max_overflow` or reduce worker count when deploying to a tighter connection limit. The extractor queue worker (`extractor_queue_worker_loop`) consumes 1 connection per worker during extraction (~3–10s per task), so `max_overflow=12` provides adequate headroom.
 
-Because PgBouncer is in **transaction mode** (`pgbouncer_mode = transaction`):
+---
 
-- `SET` statements (session state) do **not persist** across transactions.
-- **Prepared statements are per-connection** and cannot be shared; `statement_cache_size = 0` is mandatory.
-- Alembic must connect **directly** on port 5432 (bypassing PgBouncer) to run migrations safely.
-
-### AsyncSessionLocal Configuration
+## 3. AsyncSessionLocal Configuration
 
 ```python
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
     class_=AsyncSession,
     expire_on_commit=False,  # Objects remain usable after commit (avoids extra queries)
-    autoflush=False,         # Manual flush control; commit is explicit per request
+    autoflush=False,        # Manual flush control; commit is explicit per request
 )
 ```
 
-### Session Lifecycle (`get_db()`)
+- `expire_on_commit=False` — ORM objects stay attached after `commit()`, preventing lazy-load queries on already-fetched relationships.
+- `autoflush=False` — flushes are explicit; prevents premature dirty-writes during read-heavy operations.
+
+---
+
+## 4. Session Lifecycle (`get_db()`)
 
 ```
 FastAPI Depends(get_db)
@@ -98,7 +117,11 @@ async with AsyncSessionLocal() as session
               └─► finally: session.close()
 ```
 
-### Pool Checkout Monitoring
+Connections are returned to the PgBouncer pool after `session.close()`.
+
+---
+
+## 5. Pool Checkout Monitoring
 
 An `event.listens_for(engine.sync_engine, "checkout")` listener fires on every connection checkout:
 
@@ -110,57 +133,48 @@ Fields emitted: pool_size, checked_out, overflow, pool_total
 POOL_WARNING_THRESHOLD = 0.8
 ```
 
-### Exercise Seed Data
+---
+
+## 6. MemoryWriteEngine Row-Level Locking (`SELECT FOR UPDATE`)
+
+Beyond connection pooling, SmartMeal uses **PostgreSQL row-level locks** to serialize concurrent writes to `UserMemory`:
+
+```
+MemoryWriteEngine.apply()    ──► SELECT ... FOR UPDATE ON UserMemory
+                                      WHERE user_id = ?
+                                 ──► (lock acquired)
+                                      ──► Deep merge JSONB fields
+                                      ──► UPDATE UserMemory
+                                      ──► COMMIT / ROLLBACK
+```
+
+This prevents race conditions when two concurrent requests both try to update the same user's memory (e.g., `HealthMonitorAgent` + `NutritionAdvisorAgent` writing simultaneously).
+
+The lock is held for the minimum duration possible — only during the merge-and-write phase, not during the entire agent execution.
+
+---
+
+## 7. Exercise Seed Data
 
 56 exercises across three goal contexts, stored in `EXERCISES_DATA`:
 
-| Goal Type | Exercise Count | Difficulty Range |
-|---|---|---|
+| Goal Type | Count | Difficulty Range |
+|----------|-------|-----------------|
 | `giam_can` (weight loss) | 16 | `nguoi_moi` – `trung_binh` |
 | `tang_co` (muscle gain) | 14 | `nguoi_moi` – `nang_cao` |
 | `giu_can` (maintenance) | 14 | `nguoi_moi` – `trung_binh` |
 
 All exercises are bodyweight-only (`equipment_needed = False`, `is_active = True`).
 
+Seed via: `python -m app.db.seeds.seed_exercises`
+
 ---
 
-## Intra-Module Request Flow
+## File Registry
 
-### Application DB Request Lifecycle
-
-```
-FastAPI endpoint (async def)
-    │
-    ▼
-Depends(get_db)  ──► AsyncSessionLocal()
-    │
-    ├─► Service layer reads/writes via session
-    │    └─► SQLAlchemy: select / insert / update / delete
-    │
-    ├─► (Success path) → endpoint returns → router commits
-    │
-    └─► (Exception) → await session.rollback()
-         │
-         └─► finally: await session.close()
-
-AsyncSessionLocal.close()
-    │
-    ▼
-Connection returned to PgBouncer pool
-```
-
-### Migration vs. Runtime Routing
-
-```
-Alembic (alembic upgrade head)
-    │
-    ▼
-DATABASE_URL  ──► Direct PostgreSQL port 5432
-                   (bypasses PgBouncer)
-
-Application (uvicorn)
-    │
-    ▼
-ASYNC_DATABASE_POOL_URL  ──► PgBouncer port 6543
-                              (transaction mode)
-```
+| File | Authoritative Component | Core Technical Responsibility |
+|------|----------------------|----------------------------|
+| `session.py` | `engine`, `AsyncSessionLocal`, `get_db()`, `Base`, `POOL_WARNING_THRESHOLD` | PgBouncer-safe async engine; pool checkout monitoring |
+| `__init__.py` | Package marker | — |
+| `seeds/__init__.py` | Package marker | — |
+| `seeds/seed_exercises.py` | `seed_exercises()`, `EXERCISES_DATA` | One-time exercise seed (56 records) |

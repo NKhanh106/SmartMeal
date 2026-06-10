@@ -7,7 +7,7 @@ from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
-from app.models.enums import ItemSourceType, MealLogSourceType, MealTypeEnum
+from app.models.enums import ItemSourceType, MealLogSourceType, MealLogStatus, MealTypeEnum
 
 
 class MealLog(Base):
@@ -46,6 +46,16 @@ class MealLog(Base):
         default=MealLogSourceType.manual,
         server_default="manual",
     )
+
+    status: Mapped[MealLogStatus] = mapped_column(
+        Enum(MealLogStatus, name="meal_log_status", create_type=False),
+        nullable=False,
+        default=MealLogStatus.PENDING,
+        server_default="PENDING",
+        index=True,
+    )
+
+    extracted_data: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
 
     ai_model: Mapped[Optional[str]] = mapped_column(String(100))
     ai_confidence: Mapped[Optional[float]] = mapped_column(Numeric(5, 4))
