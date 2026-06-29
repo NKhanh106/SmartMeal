@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import threading
 from typing import Any, Type
 
 from groq import Groq
@@ -25,14 +26,32 @@ class AITimeoutError(Exception):
 
 class GroqProvider(AIProvider):
     provider_name = "groq"
+    _key_index: int = 0
+    _lock: threading.Lock = threading.Lock()
 
     def __init__(self):
-        if not settings.GROQ_API_KEY:
-            raise ValueError("GROQ_API_KEY is missing in config/environment")
+        self.api_keys = settings.GROQ_API_KEYS_LIST
+        if not self.api_keys:
+            raise ValueError("GROQ_API_KEYS is missing or empty in config/environment")
 
-        self.client = Groq(api_key=settings.GROQ_API_KEY)
         self.text_model = settings.GROQ_TEXT_MODEL
         self.vision_model = settings.GROQ_VISION_MODEL
+
+    def _get_next_client(self) -> Groq:
+        """Get the next Groq client with a different API key (round-robin)."""
+        with self._lock:
+            key = self.api_keys[self._key_index]
+            self._key_index = (self._key_index + 1) % len(self.api_keys)
+        return Groq(api_key=key)
+
+    def _get_client_for_key(self, key: str) -> Groq:
+        """Create a Groq client with a specific API key."""
+        return Groq(api_key=key)
+
+    @staticmethod
+    def get_shared_client() -> Groq:
+        """Get a shared Groq client instance with key rotation."""
+        return GroqProvider()._get_next_client()
 
     def _call_with_timeout(self, coro):
         """Run a blocking sync call in a thread pool with a hard timeout."""
@@ -71,7 +90,8 @@ class GroqProvider(AIProvider):
         temperature: float = 0.3,
     ) -> str:
         def _call():
-            return self.client.chat.completions.create(
+            client = self._get_next_client()
+            return client.chat.completions.create(
                 model=self.text_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -101,7 +121,8 @@ JSON Schema:
 {json.dumps(schema_json, ensure_ascii=False)}
 """
         def _call():
-            return self.client.chat.completions.create(
+            client = self._get_next_client()
+            return client.chat.completions.create(
                 model=self.text_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -145,7 +166,8 @@ JSON Schema:
 {json.dumps(schema_json, ensure_ascii=False)}
 """
         def _call():
-            return self.client.chat.completions.create(
+            client = self._get_next_client()
+            return client.chat.completions.create(
                 model=self.vision_model,
                 messages=[
                     {

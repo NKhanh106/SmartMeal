@@ -115,8 +115,9 @@ class MemoryWriteEngine:
         if isinstance(user_id, uuid.UUID):
             self._user_uuid = user_id
         else:
+            s = str(user_id)
             try:
-                self._user_uuid = uuid.UUID(str(user_id))
+                self._user_uuid = uuid.UUID(s)
             except ValueError:
                 self._user_uuid = uuid.UUID(user_id)
 
@@ -299,11 +300,14 @@ async def get_or_create_memory(
     """
     if isinstance(user_id, uuid.UUID):
         user_uuid: uuid.UUID = user_id
+    elif isinstance(user_id, int):
+        user_uuid = uuid.UUID(int=user_id)
     else:
+        s = str(user_id)
         try:
-            user_uuid = uuid.UUID(str(user_id))
+            user_uuid = uuid.UUID(s)
         except ValueError:
-            user_uuid = uuid.UUID(user_id)
+            raise ValueError(f"Cannot convert {user_id!r} to UUID")
 
     result = await db.execute(
         # Row-level lock — second writer blocks until first commits/rolls back.
@@ -450,11 +454,14 @@ async def apply_memory_updates_with_retry(
 
     if isinstance(user_id, uuid.UUID):
         user_uuid: uuid.UUID = user_id
+    elif isinstance(user_id, int):
+        user_uuid = uuid.UUID(int=user_id)
     else:
+        s = str(user_id)
         try:
-            user_uuid = uuid.UUID(str(user_id))
+            user_uuid = uuid.UUID(s)
         except ValueError:
-            user_uuid = uuid.UUID(user_id)
+            raise ValueError(f"Cannot convert {user_id!r} to UUID")
 
     for attempt in range(1, max_retries + 1):
         # Read current version snapshot — no lock, that's intentional
@@ -519,11 +526,14 @@ async def apply_memory_updates(
     """
     if isinstance(user_id, uuid.UUID):
         user_uuid: uuid.UUID = user_id
+    elif isinstance(user_id, int):
+        user_uuid = uuid.UUID(int=user_id)
     else:
+        s = str(user_id)
         try:
-            user_uuid = uuid.UUID(str(user_id))
+            user_uuid = uuid.UUID(s)
         except ValueError:
-            user_uuid = uuid.UUID(user_id)
+            raise ValueError(f"Cannot convert {user_id!r} to UUID")
 
     memory = await get_or_create_memory(user_uuid, db)
 

@@ -136,9 +136,7 @@ async def upsert_daily_recommendation(
     rec.lifestyle_suggestion = ai_result.lifestyle_suggestion
 
     rec.ai_summary = ai_result.summary
-    # Store only a debug summary of the AI response (max 500 chars).
-    # Full JSON blobs cause DB bloat (KB per record).
-    rec.ai_raw_response = str(raw_response)[:500] if raw_response else None  # type: ignore — TEXT column
+    rec.ai_raw_response = str(raw_response)[:500] if raw_response else None  # type: ignore
     rec.ai_analysis_log_id = ai_analysis_log_id
     rec.status = "generated"
 

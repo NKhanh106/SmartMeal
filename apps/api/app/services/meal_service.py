@@ -145,7 +145,6 @@ async def recalculate_meal_totals(db: AsyncSession, meal_log_id):
         )
 
     # Clamp negative values to zero — a meal cannot have negative calories/nutrients.
-    # D-5 fix: prevents negative totals from malicious MealItem edits.
     neg_warn = []
     for item in items:
         for field, val in [("calories", item.calories), ("protein_g", item.protein_g),

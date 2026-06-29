@@ -36,8 +36,8 @@ logger = logging.getLogger(__name__)
 # Queue name
 EXTRACTOR_QUEUE = "smartmeal:extractor_queue"
 
-# Proposal TTL in Redis (10 minutes — long enough for user to see SSE event)
-PROPOSAL_TTL_SECONDS = 600
+# Proposal TTL in Redis (1 hour — long enough for user to confirm/reject)
+PROPOSAL_TTL_SECONDS = 3600
 
 
 @dataclass
@@ -154,10 +154,9 @@ async def extractor_drain_proposals(
         redis = await get_redis()
         pattern = f"smartmeal:proposal:{user_id}:*"
 
-        # FIX-8 (C-3): SCAN to collect keys, then atomically drain all with
-        # a Redis pipeline. This prevents concurrent requests from racing —
-        # the pipeline executes all GETDELs in a single round-trip, so
-        # keys are collected and deleted atomically from Redis's perspective.
+        # SCAN to collect keys, then atomically drain all with a Redis pipeline.
+        # This prevents concurrent requests from racing — the pipeline executes all
+        # GETs in a single round-trip, so keys are collected atomically.
         keys: list[str] = []
         async for key in redis.scan_iter(match=pattern, count=100):
             keys.append(key)
@@ -165,12 +164,12 @@ async def extractor_drain_proposals(
         if not keys:
             return []
 
-        # Pipeline: batch all GETDEL commands into one network round-trip.
-        # Using transaction=False because SCAN already gave us the key set;
-        # async redis pipeline still guarantees atomic per-key execution.
+        # Drain proposal values without deleting them. The proposal stays in
+        # Redis (TTL=600s) so the user can still confirm/reject after receiving
+        # the SSE event. The confirm/reject endpoints own the deletion.
         async with redis.pipeline(transaction=False) as pipe:
             for key in keys:
-                pipe.getdel(key)
+                pipe.get(key)
             results = await pipe.execute()
 
         for raw in results:

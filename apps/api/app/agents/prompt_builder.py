@@ -68,8 +68,8 @@ def build_health_monitor_context(ctx: FullUserContext) -> str:
             parts = []
             for c in active:
                 sev = c.get("severity", "managed")
-                note = f" ({c['note']})" if c.get("note") else ""
-                parts.append(f"{c['condition']} [{sev}]{note}")
+                note = f" ({c.get('note', '')})" if c.get("note") else ""
+                parts.append(f"{c.get('condition', 'Unknown')} [{sev}]{note}")
             lines.append(f"Health conditions: {'; '.join(parts)}")
 
     # Medications

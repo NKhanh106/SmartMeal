@@ -1,6 +1,6 @@
 import type { UpdateProposal, ProposalConfirmResult } from "@/types/update-proposal";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
+const API_BASE = `${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"}/api/v1`;
 
 export async function confirmProposal(
   sessionId: string,

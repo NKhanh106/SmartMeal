@@ -12,6 +12,9 @@ import type {
 } from "@/components/chatbot/types";
 import type { UpdateProposal } from "@/types/update-proposal";
 import { confirmProposal as apiConfirmProposal, rejectProposal as apiRejectProposal } from "@/services/proposal.service";
+
+// Helper đảm bảo URL có /api/v1
+const getApiBase = () => `${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"}/api/v1`;
 import {
   chatbotService,
   getCachedSessionId,
@@ -258,7 +261,7 @@ export function useChatBot() {
     );
     try {
       // Trigger server-side total recalculation after editing items
-      await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL ?? ""}/api/v1/meal-logs/${id}/recalculate`, { method: "POST" });
+      await fetch(`${getApiBase()}/meal-logs/${id}/recalculate`, { method: "POST" });
     } catch (err) {
       // Revert optimistic update on failure
       if (currentMeal) {
@@ -502,7 +505,7 @@ export function useChatBot() {
 
       const token = getAccessToken();
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL ?? ""}/api/v1/ai/chat/sessions/${sessionId}/messages/stream`,
+`${getApiBase()}/ai/chat/sessions/${sessionId}/messages/stream`,
         {
           method: "POST",
           headers: {
@@ -609,7 +612,7 @@ export function useChatBot() {
       try {
         const token = getAccessToken();
         const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_BASE_URL ?? ""}/api/v1/ai/chat/sessions/${sessionId}/card-response`,
+          `${getApiBase()}/ai/chat/sessions/${sessionId}/card-response`,
           {
             method: "POST",
             headers: {

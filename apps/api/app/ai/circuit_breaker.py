@@ -47,8 +47,8 @@ class CircuitBreaker:
         self._failure_count = 0
         self._success_count = 0
         self._last_failure_time: float = 0
-        # FIX-8 (C-5): Serializes state transitions across concurrent coroutines.
-        # Prevents duplicate HALF_OPEN → CLOSED log messages and TOCTOU races.
+        # Serializes state transitions across concurrent coroutines.
+        # Prevents duplicate state transition log messages and TOCTOU races.
         self._transition_lock = asyncio.Lock()
 
     @property
@@ -65,7 +65,7 @@ class CircuitBreaker:
 
     async def record_success(self) -> None:
         self._failure_count = 0
-        # FIX-8 (C-5): Acquire lock before checking/transitioning HALF_OPEN → CLOSED.
+        # Acquire lock before checking/transitioning HALF_OPEN → CLOSED.
         # This prevents two concurrent coroutines from both transitioning and
         # emitting duplicate log messages.
         async with self._transition_lock:
@@ -79,7 +79,7 @@ class CircuitBreaker:
     async def record_failure(self) -> None:
         self._failure_count += 1
         self._last_failure_time = time.time()
-        # FIX-8 (C-5): Lock prevents simultaneous HALF_OPEN → OPEN transitions
+        # Lock prevents simultaneous HALF_OPEN → OPEN transitions
         # from two concurrent failure callbacks.
         async with self._transition_lock:
             if self._state == CircuitState.HALF_OPEN:

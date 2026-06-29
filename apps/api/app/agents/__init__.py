@@ -13,12 +13,13 @@ Each agent inherits from BaseAgent and implements the `run()` method.
 Use memory_service.py to read/write UserMemory.
 """
 
-from app.agents.base import AgentContext, AgentResult, BaseAgent
+from app.agents.base import AgentContext, AgentResult, BaseAgent, get_async_groq_client
 
 __all__ = [
     "AgentContext",
     "AgentResult",
     "BaseAgent",
+    "get_async_groq_client",
 ]
 
 

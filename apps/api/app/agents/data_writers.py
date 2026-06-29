@@ -71,7 +71,7 @@ async def execute_confirmed_update(
         return DataWriteResult(
             success=False,
             target=proposal.target,
-            message="Khong ho tro loai cap nhat nay",
+            message="Không hỗ trợ loại cập nhật này",
             error=f"No writer for {proposal.target}",
         )
 
@@ -86,27 +86,40 @@ async def execute_confirmed_update(
         return DataWriteResult(
             success=False,
             target=proposal.target,
-            message="Luu du lieu that bai, vui long thu lai",
+            message="Lưu dữ liệu thất bại, vui lòng thử lại",
             error=str(e),
         )
 
 
-def _user_uuid(user_id: int | uuid.UUID) -> uuid.UUID:
-    """Convert user_id to UUID. Handles both int (PK) and UUID forms."""
+def _user_uuid(user_id: int | uuid.UUID | str) -> uuid.UUID:
+    """Convert user_id to UUID. Handles int (PK), UUID, and str forms."""
     if isinstance(user_id, uuid.UUID):
         return user_id
     if isinstance(user_id, int):
         return uuid.UUID(int=user_id)
+    # Handle string input - common case when data comes from Redis/API
+    s = str(user_id)
     try:
-        return uuid.UUID(str(user_id))
-    except (ValueError, TypeError):
+        return uuid.UUID(s)
+    except ValueError:
         raise ValueError(f"Cannot convert {user_id!r} to UUID")
 
 
-def _user_int(user_id: int | uuid.UUID) -> int:
+def _user_int(user_id: int | uuid.UUID | str) -> int:
     if isinstance(user_id, int):
         return user_id
-    return user_id.int
+    if isinstance(user_id, uuid.UUID):
+        return user_id.int
+    # Try parsing as int first (handles "1", "123")
+    try:
+        return int(user_id)
+    except (ValueError, TypeError):
+        pass
+    # Try parsing as UUID string
+    try:
+        return uuid.UUID(str(user_id)).int
+    except (ValueError, TypeError):
+        raise ValueError(f"Cannot convert {user_id!r} to int")
 
 
 async def _write_meal_log(
@@ -116,7 +129,7 @@ async def _write_meal_log(
     if not raw_items:
         return DataWriteResult(
             success=False, target=UpdateTarget.MEAL_LOG,
-            message="Khong co thong tin mon an",
+            message="Không có thông tin món ăn",
             error="No items in raw_data",
         )
 
@@ -155,21 +168,21 @@ async def _write_meal_log(
     except Exception as e:
         return DataWriteResult(
             success=False, target=UpdateTarget.MEAL_LOG,
-            message=f"Khong the tao ban ghi bua an: {e}",
+            message=f"Không thể tạo bản ghi bữa ăn: {e}",
             error=str(e),
         )
 
     meal_type_vn = {
-        MealTypeEnum.bua_sang: "Bua sang",
-        MealTypeEnum.bua_trua: "Bua trua",
-        MealTypeEnum.bua_toi: "Bua toi",
-        MealTypeEnum.an_vat: "Bua phu",
-        MealTypeEnum.khac: "Bua an",
-    }.get(meal_log.meal_type, "Bua an")
+        MealTypeEnum.bua_sang: "Bữa sáng",
+        MealTypeEnum.bua_trua: "Bữa trưa",
+        MealTypeEnum.bua_toi: "Bữa tối",
+        MealTypeEnum.an_vat: "Ăn vặt",
+        MealTypeEnum.khac: "Bữa ăn",
+    }.get(meal_log.meal_type, "Bữa ăn")
 
     return DataWriteResult(
         success=True, target=UpdateTarget.MEAL_LOG,
-        message=f"Da luu {meal_type_vn} (~{meal_log.total_calories:.0f} kcal)",
+        message=f"Đã lưu {meal_type_vn} (~{meal_log.total_calories:.0f} kcal)",
         records_created=1 + len(raw_items),
     )
 
@@ -181,7 +194,7 @@ async def _write_body_weight(
     if not weight:
         return DataWriteResult(
             success=False, target=UpdateTarget.BODY_WEIGHT,
-            message="Khong co du lieu can nang",
+            message="Không có dữ liệu cân nặng",
             error="Missing weight_kg",
         )
 
@@ -191,7 +204,7 @@ async def _write_body_weight(
     except (TypeError, ValueError):
         return DataWriteResult(
             success=False, target=UpdateTarget.BODY_WEIGHT,
-            message="Gia tri can nang khong hop le",
+            message="Giá trị cân nặng không hợp lệ",
             error=f"weight_kg={weight!r} cannot be converted to float",
         )
 
@@ -202,7 +215,7 @@ async def _write_body_weight(
         )
         return DataWriteResult(
             success=False, target=UpdateTarget.BODY_WEIGHT,
-            message=f"Can nang phai trong khoang {MIN_WEIGHT_KG}-{MAX_WEIGHT_KG} kg",
+            message=f"Cân nặng phải trong khoảng {MIN_WEIGHT_KG}-{MAX_WEIGHT_KG} kg",
             error=f"weight_kg={weight_val} outside safe range [{MIN_WEIGHT_KG}, {MAX_WEIGHT_KG}]",
         )
 
@@ -226,7 +239,7 @@ async def _write_body_weight(
 
     return DataWriteResult(
         success=True, target=UpdateTarget.BODY_WEIGHT,
-        message=f"Da cap nhat can nang: {weight} kg",
+        message=f"Đã cập nhật cân nặng: {weight} kg",
         records_updated=1, records_created=1,
     )
 
@@ -247,12 +260,12 @@ async def _write_body_measurement(
 
     parts = []
     if data.get("waist_cm"): parts.append(f"eo {data['waist_cm']}cm")
-    if data.get("chest_cm"): parts.append(f"nguc {data['chest_cm']}cm")
-    if data.get("body_fat_pct"): parts.append(f"mo {data['body_fat_pct']}%")
+    if data.get("chest_cm"): parts.append(f"ngực {data['chest_cm']}cm")
+    if data.get("body_fat_pct"): parts.append(f"mỡ {data['body_fat_pct']}%")
 
     return DataWriteResult(
         success=True, target=UpdateTarget.BODY_MEASUREMENT,
-        message=f"Da luu so do: {', '.join(parts) if parts else 'so do'}",
+        message=f"Đã lưu số đo: {', '.join(parts) if parts else 'số đo'}",
         records_created=1,
     )
 
@@ -278,7 +291,7 @@ async def _write_health_symptom(
 
     return DataWriteResult(
         success=True, target=UpdateTarget.HEALTH_SYMPTOM,
-        message=f"Da ghi nhan: {data.get('description', 'trieu chung')}",
+        message=f"Đã ghi nhận: {data.get('description', 'triệu chứng')}",
         records_created=1,
     )
 
@@ -305,7 +318,7 @@ async def _write_health_recovery(
 
     return DataWriteResult(
         success=True, target=UpdateTarget.HEALTH_RECOVERY,
-        message="Da cap nhat: ban da hoi phuc",
+        message="Đã cập nhật: bạn đã hồi phục",
         records_updated=updated,
     )
 
@@ -326,10 +339,10 @@ async def _write_workout_log(
         agent_name=None,
     )
     duration = data.get("duration_minutes")
-    workout_type = data.get("workout_type", "buoi tap")
-    msg = f"Da luu: {workout_type}"
+    workout_type = data.get("workout_type", "buổi tập")
+    msg = f"Đã lưu: {workout_type}"
     if duration:
-        msg += f" ({duration} phut)"
+        msg += f" ({duration} phút)"
 
     return DataWriteResult(
         success=True, target=UpdateTarget.WORKOUT_LOG,
@@ -358,10 +371,10 @@ async def _write_muscle_soreness(
         db,
         agent_name=None,
     )
-    action_vn = "Da ghi nhan" if action == "add" else "Da xoa"
+    action_vn = "Đã ghi nhận" if action == "add" else "Đã xóa"
     return DataWriteResult(
         success=True, target=UpdateTarget.MUSCLE_SORENESS,
-        message=f"{action_vn} vung dau: {', '.join(areas)}",
+        message=f"{action_vn} vùng đau: {', '.join(areas)}",
         records_updated=1,
     )
 
@@ -381,7 +394,7 @@ async def _write_profile_metric(
     if not updates:
         return DataWriteResult(
             success=False, target=UpdateTarget.PROFILE_METRIC,
-            message="Khong co thong tin de cap nhat",
+            message="Không có thông tin để cập nhật",
             error="No valid fields",
         )
 
@@ -393,7 +406,7 @@ async def _write_profile_metric(
     parts = [f"{k}: {v}" for k, v in updates.items()]
     return DataWriteResult(
         success=True, target=UpdateTarget.PROFILE_METRIC,
-        message=f"Da cap nhat ho so: {', '.join(parts)}",
+        message=f"Đã cập nhật hồ sơ: {', '.join(parts)}",
         records_updated=1,
     )
 
@@ -422,7 +435,7 @@ async def _write_sleep_log(
 
     return DataWriteResult(
         success=True, target=UpdateTarget.SLEEP_LOG,
-        message=f"Da ghi nhan giac ngu: {', '.join(parts) if parts else 'giac ngu'}",
+        message=f"Đã ghi nhận giấc ngủ: {', '.join(parts) if parts else 'giấc ngủ'}",
         records_updated=1 if updates else 0,
     )
 
@@ -448,7 +461,7 @@ async def _write_nutrition_goal(
                 except (TypeError, ValueError):
                     return DataWriteResult(
                         success=False, target=UpdateTarget.NUTRITION_GOAL,
-                        message="Gia tri calories khong hop le",
+                        message="Giá trị calories không hợp lệ",
                         error=f"daily_calorie_target={value!r} not numeric",
                     )
                 if not (MIN_DAILY_CALORIES <= cal_val <= MAX_TOTAL_CALORIES):
@@ -459,7 +472,7 @@ async def _write_nutrition_goal(
                     )
                     return DataWriteResult(
                         success=False, target=UpdateTarget.NUTRITION_GOAL,
-                        message=f"Calories phai trong khoang {MIN_DAILY_CALORIES}-{MAX_TOTAL_CALORIES}",
+                        message=f"Calories phải trong khoảng {MIN_DAILY_CALORIES}-{MAX_TOTAL_CALORIES}",
                         error=f"daily_calorie_target={cal_val} outside safe range",
                     )
             if db_field == "protein_target_g":
@@ -470,7 +483,7 @@ async def _write_nutrition_goal(
                 if p_val is not None and not (0 <= p_val <= MAX_PROTEIN_G):
                     return DataWriteResult(
                         success=False, target=UpdateTarget.NUTRITION_GOAL,
-                        message=f"Protein phai trong khoang 0-{MAX_PROTEIN_G}g",
+                        message=f"Protein phải trong khoảng 0-{MAX_PROTEIN_G}g",
                         error=f"protein_target_g={p_val} outside safe range",
                     )
             if db_field == "fat_target_g":
@@ -481,7 +494,7 @@ async def _write_nutrition_goal(
                 if f_val is not None and not (0 <= f_val <= MAX_FAT_G):
                     return DataWriteResult(
                         success=False, target=UpdateTarget.NUTRITION_GOAL,
-                        message=f"Fat phai trong khoang 0-{MAX_FAT_G}g",
+                        message=f"Fat phải trong khoảng 0-{MAX_FAT_G}g",
                         error=f"fat_target_g={f_val} outside safe range",
                     )
             # Explicit application-layer range validation for carbs and hydration
@@ -491,13 +504,13 @@ async def _write_nutrition_goal(
                 except (TypeError, ValueError):
                     return DataWriteResult(
                         success=False, target=UpdateTarget.NUTRITION_GOAL,
-                        message="Gia tri carbohydrate khong hop le",
+                        message="Giá trị carbohydrate không hợp lệ",
                         error=f"carb_target_g={value!r} not numeric",
                     )
                 if not (0 <= c_val <= 1500):
                     return DataWriteResult(
                         success=False, target=UpdateTarget.NUTRITION_GOAL,
-                        message="Carbohydrate target phai trong khoang 0-1500g",
+                        message="Carbohydrate target phải trong khoảng 0-1500g",
                         error="Carbohydrate target out of biomedical safe bounds [0, 1500]g",
                     )
             if db_field == "hydration_goal_ml":
@@ -506,13 +519,13 @@ async def _write_nutrition_goal(
                 except (TypeError, ValueError):
                     return DataWriteResult(
                         success=False, target=UpdateTarget.NUTRITION_GOAL,
-                        message="Gia tri hydration khong hop le",
+                        message="Giá trị hydration không hợp lệ",
                         error=f"hydration_goal_ml={value!r} not numeric",
                     )
                 if not (500 <= h_val <= 10000):
                     return DataWriteResult(
                         success=False, target=UpdateTarget.NUTRITION_GOAL,
-                        message="Hydration target phai trong khoang 500-10000ml",
+                        message="Hydration target phải trong khoảng 500-10000ml",
                         error="Hydration target out of safe bounds [500, 10000]ml",
                     )
             updates[db_field] = value
@@ -520,7 +533,7 @@ async def _write_nutrition_goal(
     if not updates:
         return DataWriteResult(
             success=False, target=UpdateTarget.NUTRITION_GOAL,
-            message="Khong co thong tin muc tieu de cap nhat",
+            message="Không có thông tin mục tiêu để cập nhật",
         )
 
     await db.execute(
@@ -531,6 +544,6 @@ async def _write_nutrition_goal(
     )
     return DataWriteResult(
         success=True, target=UpdateTarget.NUTRITION_GOAL,
-        message="Da cap nhat muc tieu dinh duong",
+        message="Đã cập nhật mục tiêu dinh dưỡng",
         records_updated=1,
     )

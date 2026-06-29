@@ -36,18 +36,35 @@ from app.core.config import settings
 from app.models import AgentRun
 from app.schemas.chat_card import ChatCard
 from app.agents.context_loader import FullUserContext
+from app.ai.providers.groq_provider import GroqProvider
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger("smartmeal.agents")
 
-_groq_client: AsyncGroq | None = None
+_groq_client_index: int = 0
+_groq_lock = asyncio.Lock()
 
 
 def _get_groq_client() -> AsyncGroq:
-    global _groq_client
-    if _groq_client is None:
-        _groq_client = AsyncGroq(api_key=settings.GROQ_API_KEY)
-    return _groq_client
+    global _groq_client_index
+    keys = settings.GROQ_API_KEYS_LIST
+    if not keys:
+        raise ValueError("GROQ_API_KEYS is missing or empty")
+    key = keys[_groq_client_index % len(keys)]
+    _groq_client_index += 1
+    return AsyncGroq(api_key=key)
+
+
+async def get_async_groq_client() -> AsyncGroq:
+    """Get an AsyncGroq client with round-robin key rotation."""
+    global _groq_client_index
+    async with _groq_lock:
+        keys = settings.GROQ_API_KEYS_LIST
+        if not keys:
+            raise ValueError("GROQ_API_KEYS is missing or empty")
+        key = keys[_groq_client_index % len(keys)]
+        _groq_client_index += 1
+    return AsyncGroq(api_key=key)
 
 
 AI_TIMEOUT_SECONDS = 30
@@ -225,23 +242,50 @@ class BaseAgent(ABC):
         ]
 
         start = time.perf_counter()
+        last_error: Exception | None = None
+        keys = settings.GROQ_API_KEYS_LIST
 
-        async def _do_create():
+        for attempt in range(len(keys)):
             client = _get_groq_client()
-            return await client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=0.3,
-            )
+            current_key_idx = _groq_client_index - 1
 
-        try:
-            async with asyncio.timeout(AI_TIMEOUT_SECONDS):
-                stream = await groq_circuit.call(_do_create)
-        except asyncio.TimeoutError:
+            async def _do_create(c=client):
+                return await c.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=0.3,
+                )
+
+            try:
+                async with asyncio.timeout(AI_TIMEOUT_SECONDS):
+                    stream = await groq_circuit.call(_do_create)
+                break
+            except Exception as exc:
+                last_error = exc
+                error_str = str(exc).lower()
+                is_rate_limit = "rate limit" in error_str or "429" in error_str
+
+                if is_rate_limit and attempt < len(keys) - 1:
+                    logger.warning(
+                        f"[Agent:{self.name}] Rate limit on key {current_key_idx % len(keys)}, "
+                        f"trying next key (attempt {attempt + 1}/{len(keys)})"
+                    )
+                    continue
+                if is_rate_limit and attempt < len(keys) - 1:
+                    logger.warning(
+                        f"[Agent:{self.name}] Rate limit on key {current_key_idx % len(keys)}, "
+                        f"trying next key (attempt {attempt + 1}/{len(keys)})"
+                    )
+                    continue
+                raise
+
+        if last_error and isinstance(last_error, asyncio.TimeoutError):
             raise TimeoutError(
                 f"AI call timed out after {AI_TIMEOUT_SECONDS}s for agent '{self.name}'"
             ) from None
+        if last_error:
+            raise last_error
 
         latency_ms = int((time.perf_counter() - start) * 1000)
         usage = stream.usage
@@ -313,7 +357,7 @@ class BaseAgent(ABC):
             "completed_at": datetime.now(timezone.utc),
         }
 
-        if self._last_usage:
+        if self._last_usage and isinstance(self._last_usage, dict):
             update_vals["input_tokens"] = self._last_usage.get("input_tokens")
             update_vals["output_tokens"] = self._last_usage.get("output_tokens")
             update_vals["latency_ms"] = self._last_usage.get("latency_ms")

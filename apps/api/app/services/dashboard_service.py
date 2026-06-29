@@ -8,7 +8,7 @@ from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 
 from app.models.meal import MealLog
-from app.models.nutrition_goal import NutritionGoal
+from app.models.enums import MealLogSourceType
 from app.core.utils import get_active_goal as _get_active_goal
 
 
@@ -170,7 +170,7 @@ async def get_daily_dashboard(
     # Count auto-detected meals (from chat)
     auto_detected_count = sum(
         1 for meal in meals
-        if hasattr(meal, "source") and meal.source in ("chat_extraction", "chat_command")
+        if meal.source in (MealLogSourceType.chat_extraction, MealLogSourceType.chat_command)
     )
 
     return {

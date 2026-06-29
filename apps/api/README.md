@@ -494,7 +494,8 @@ AI_CHAT_PROVIDER=groq
 AI_PLANNER_PROVIDER=groq
 AI_MEAL_PROVIDER=gemini
 
-GROQ_API_KEY=gsk_CHANGE_ME
+# Multiple keys separated by comma - will rotate on rate limit
+GROQ_API_KEYS=gsk_key1,gsk_key2
 GROQ_TEXT_MODEL=llama-3.3-70b-versatile
 GROQ_VISION_MODEL=meta-llama/llama-4-scout-17b-16e-instruct
 

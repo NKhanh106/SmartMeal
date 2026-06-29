@@ -412,7 +412,7 @@ class MultiAgentOrchestrator:
                         # Route all memory updates through MemoryWriteEngine
                         if agent_result.memory_updates:
                             canonical_name = _AGENT_NAME_MAP.get(key, key)
-                            authorized = write_engine.apply(canonical_name, agent_result.memory_updates)
+                            authorized = await write_engine.apply(canonical_name, agent_result.memory_updates)
                             if not authorized:
                                 logger.warning(
                                     "[Orchestrator] Phase 2 write blocked for '%s' (unauthorized field)", key
@@ -574,7 +574,9 @@ class MultiAgentOrchestrator:
                     title="Ban khong co don trong dieu nay",
                     subtitle=(
                         "Duong day ho tro tam ly 24/7: "
-                        "1800 599 920 (mien phi, bao mat)."
+                        "0963 061 414 (Ngay Mai, mien phi, bao mat), "
+                        "0909 658 035 / 0784 604 598 (Cham soc Suc khoe Viet), "
+                        "024 3576 5344 (Vien Tam than Quoc gia)."
                     ),
                     trigger_reason="mental_health_crisis",
                     skippable=False,

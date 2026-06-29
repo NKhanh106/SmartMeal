@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: str = "5432"
     DATABASE_URL: str = ""
-    DATABASE_POOL_URL: str | None = None  # FIX-5: Pooled URL for FastAPI runtime (PgBouncer port 6543)
+    DATABASE_POOL_URL: str | None = None  # Pooled URL for FastAPI runtime (PgBouncer port 6543)
     TEST_DATABASE_URL: str | None = None
 
     @computed_field
@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     @property
     def ASYNC_DATABASE_POOL_URL(self) -> str:
         """
-        FIX-5: Async URL for FastAPI runtime — uses DATABASE_POOL_URL (PgBouncer port 6543).
+        Async URL for FastAPI runtime — uses DATABASE_POOL_URL if available (PgBouncer port 6543).
 
         Priority:
           1. DATABASE_POOL_URL  — Pooled connection (recommended for app runtime)
@@ -77,9 +77,25 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str | None = None
     GEMINI_MODEL: str = "gemini-2.5-flash"
 
-    GROQ_API_KEY: str | None = None
+    GROQ_API_KEYS: str | None = None  # Comma-separated list: key1,key2,key3
     GROQ_TEXT_MODEL: str = "llama-3.3-70b-versatile"
     GROQ_VISION_MODEL: str = "meta-llama/llama-4-scout-17b-16e-instruct"
+
+    @computed_field
+    @property
+    def GROQ_API_KEYS_LIST(self) -> list[str]:
+        """Parse GROQ_API_KEYS into a list of valid keys."""
+        if self.GROQ_API_KEYS:
+            keys = [k.strip() for k in self.GROQ_API_KEYS.split(",") if k.strip()]
+            return keys
+        return []
+
+    @computed_field
+    @property
+    def GROQ_API_KEY(self) -> str | None:
+        """Backward compatibility: return first key if available."""
+        keys = self.GROQ_API_KEYS_LIST
+        return keys[0] if keys else None
 
     USDA_API_KEY: str = ""
 
@@ -98,7 +114,7 @@ class Settings(BaseSettings):
     # Supabase uses PgBouncer in transaction mode as a connection pooler.
     # Two-tier pooling: app pool (SQLAlchemy) sits behind PgBouncer pool.
     #
-    # FIX-8 (C-1, C-7): pool_size=4, bg_limit=4 per worker process.
+    # Pool settings per worker: pool_size=4, max_overflow=12
     # The extractor_queue_worker_loop consumes 1 connection during extraction (~3-10s).
     # max_overflow=12 provides headroom so the queue worker + burst HTTP requests
     # never exhaust the pool.
@@ -120,7 +136,7 @@ class Settings(BaseSettings):
     DATABASE_POOL_PRE_PING: bool = False
 
     # ── Background Task Concurrency ─────────────────────────────────────────────
-    # FIX-8 (C-1): bg_limit=4 equals pool_size=4 per worker.
+    # bg_limit=4 equals pool_size=4 per worker.
     # With max_overflow=12, the pool provides headroom for the queue worker.
     # Background tasks hold connections for the full LLM call duration (~3-10s),
     # so the semaphore prevents runaway concurrency.

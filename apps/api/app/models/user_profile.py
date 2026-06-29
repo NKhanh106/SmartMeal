@@ -57,8 +57,6 @@ class UserProfile(Base):
     )
 
     # --- Cá nhân hóa thực đơn ---
-    # Note: The legacy Text columns were renamed to _text suffix during migration.
-    # New code should use the JSONB versions below.
     diet_type: Mapped[DietTypeEnum] = mapped_column(
         Enum(DietTypeEnum, name="diet_type_enum", create_type=False),
         nullable=False,

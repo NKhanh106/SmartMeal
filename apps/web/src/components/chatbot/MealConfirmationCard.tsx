@@ -7,6 +7,7 @@ import { UtensilsCrossed, Minus, Plus, Loader2, CheckCircle2, X } from "lucide-r
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { toast } from "@/hooks/use-toast";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -58,11 +59,11 @@ interface MealConfirmationCardProps {
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
 const MEAL_TYPE_MAP: Record<string, string> = {
-  bua_sang: "Bữa sáng",
-  bua_trua: "Bữa trưa",
-  bua_toi: "Bữa tối",
-  an_vat: "Ăn vặt",
-  khac: "Khác",
+  bua_sang: "Breakfast",
+  bua_trua: "Lunch",
+  bua_toi: "Dinner",
+  an_vat: "Snack",
+  khac: "Other",
 };
 
 const MEAL_TYPE_EMOJI: Record<string, string> = {
@@ -74,9 +75,9 @@ const MEAL_TYPE_EMOJI: Record<string, string> = {
 };
 
 const CONFIDENCE_LABEL: Record<string, { label: string; color: string }> = {
-  high:   { label: "Độ chính xác cao",  color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  medium: { label: "Có thể cần chỉnh",  color: "bg-amber-50 text-amber-700 border-amber-200" },
-  low:    { label: "Cần xác nhận kỹ",   color: "bg-red-50 text-red-700 border-red-200" },
+  high:   { label: "High confidence", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  medium: { label: "May need review",  color: "bg-amber-50 text-amber-700 border-amber-200" },
+  low:    { label: "Review needed",    color: "bg-red-50 text-red-700 border-red-200" },
 };
 
 // ─── Skeleton Component ───────────────────────────────────────────────────────
@@ -176,6 +177,7 @@ export function MealConfirmationCard({
 
   // ── Submit ───────────────────────────────────────────────────────────────────
   const handleConfirm = async () => {
+    console.log("DEBUG handleConfirm - START", data.id);
     setIsConfirming(true);
     setError(null);
     try {
@@ -187,14 +189,29 @@ export function MealConfirmationCard({
         total_carb_g: macros.carb_g,
         total_fat_g: macros.fat_g,
       };
+      console.log("DEBUG handleConfirm - calling API with:", data.id, finalData);
       await onConfirm(data.id, finalData);
+      console.log("DEBUG handleConfirm - API SUCCESS");
       setIsConfirmed(true);
+      toast({
+        title: "Saved successfully!",
+        description: `${mealLabel} meal has been confirmed.`,
+        variant: "default",
+      });
+      // Auto-dismiss sau 3 giây
+      setTimeout(() => {
+        console.log("DEBUG handleConfirm - auto dismiss");
+        onCancel(data.id);
+      }, 3000);
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Xác nhận thất bại. Vui lòng thử lại."
-      );
+      console.error("DEBUG handleConfirm - API ERROR:", err);
+      const errorMsg = err instanceof Error ? err.message : "Confirmation failed. Please try again.";
+      setError(errorMsg);
+      toast({
+        title: "Confirmation error",
+        description: errorMsg,
+        variant: "destructive",
+      });
     } finally {
       setIsConfirming(false);
     }
@@ -222,7 +239,7 @@ export function MealConfirmationCard({
             </div>
             <div>
               <h3 className="font-semibold text-slate-900 text-sm leading-snug">
-                Xác nhận nhật ký ăn uống
+                Confirm meal log
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
                 {mealEmoji} {mealLabel}
@@ -270,7 +287,7 @@ export function MealConfirmationCard({
                 <button
                   onClick={() => adjustQty(idx, -1)}
                   disabled={isConfirming || isConfirmed}
-                  aria-label="Giảm số lượng"
+                  aria-label="Decrease quantity"
                   className={cn(
                     "h-8 w-8 rounded-full border border-slate-200",
                     "flex items-center justify-center",
@@ -290,7 +307,7 @@ export function MealConfirmationCard({
                 <button
                   onClick={() => adjustQty(idx, 1)}
                   disabled={isConfirming || isConfirmed}
-                  aria-label="Tăng số lượng"
+                  aria-label="Increase quantity"
                   className={cn(
                     "h-8 w-8 rounded-full border border-slate-200",
                     "flex items-center justify-center",
@@ -377,13 +394,21 @@ export function MealConfirmationCard({
               Đã xác nhận
             </>
           ) : (
-            "✓ Xác nhận lưu"
+            "✓ Xác nhận & Lưu"
           )}
         </Button>
 
         <Button
           variant="outline"
-          onClick={() => onCancel(data.id)}
+          onClick={() => {
+            console.log("DEBUG Cancel clicked for:", data.id);
+            toast({
+              title: "Đã hủy",
+              description: "Nhật ký ăn đã được bỏ qua.",
+              variant: "default",
+            });
+            onCancel(data.id);
+          }}
           disabled={isConfirming || isConfirmed}
           className="h-10 px-4 rounded-xl font-medium text-sm
                      text-slate-500 border border-slate-200

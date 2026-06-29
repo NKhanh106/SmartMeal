@@ -51,8 +51,8 @@ Supabase's free tier uses PgBouncer as a connection pooler in **transaction mode
 ```python
 engine = create_async_engine(
     settings.ASYNC_DATABASE_POOL_URL,   # Supabase: host:6543 (PgBouncer)
-    pool_size=4,                     # FIX-8 (C-1): Per-worker base connections
-    max_overflow=12,                 # FIX-8 (C-1): Per-worker burst ceiling
+    pool_size=4,                     # Per-worker base connections
+    max_overflow=12,                 # Per-worker burst ceiling
     pool_timeout=30,                # Wait up to 30s for a connection
     pool_recycle=1800,              # 30 min — PgBouncer idle timeout = 60 min
     pool_pre_ping=False,             # DISABLED — prevents PgBouncer tx pollution
@@ -82,7 +82,7 @@ Supabase Free Tier limit  = 60 connections
 Headroom                 = 16 spare connections
 ```
 
-> **FIX-8 (C-1) note**: The ceiling of 64 total connections is intentionally tight to the Supabase free-tier limit of 60. Increase `max_overflow` or reduce worker count when deploying to a tighter connection limit. The extractor queue worker (`extractor_queue_worker_loop`) consumes 1 connection per worker during extraction (~3–10s per task), so `max_overflow=12` provides adequate headroom.
+> **Note**: The ceiling of 64 total connections is intentionally tight to the Supabase free-tier limit of 60. Increase `max_overflow` or reduce worker count when deploying to a tighter connection limit. The extractor queue worker (`extractor_queue_worker_loop`) consumes 1 connection per worker during extraction (~3–10s per task), so `max_overflow=12` provides adequate headroom.
 
 ---
 

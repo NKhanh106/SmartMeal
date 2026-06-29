@@ -30,8 +30,8 @@ Tối đa 1 card mỗi phản hồi. Khi dùng → viết 1 câu ngắn rồi g�
 
 def build_chatbot_user_prompt(context: dict) -> str:
     """
-    FIX-7 (V-2): JSON-encode the context dict so that any residual injection
-    payloads surviving sanitize_for_prompt (e.g. a "[filtered]" replacement string
+    JSON-encode the context dict so that any residual injection payloads
+    surviving sanitize_for_prompt (e.g. a "[filtered]" replacement string
     containing adversarial text) are escaped inside a JSON string literal and
     cannot break out of the template.
 

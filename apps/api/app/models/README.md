@@ -52,6 +52,10 @@ User (1) ──────────────── (1) UserProfile
   ├── (many) MealLog ──── (many) MealItem
   ├── (many) WorkoutPlan ── (many) WorkoutItem
   ├── (many) ProgressLog
+  ├── (many) WorkoutLog
+  ├── (many) SleepLog
+  ├── (many) HealthEvent
+  ├── (many) MuscleSoreness
   ├── (many) ChatSession ── (many) ChatMessage
   │                              │ card (JSONB)
   │                              │ card_response (JSONB)
@@ -208,6 +212,72 @@ Exercise library — seeded from a pre-defined list. Used for autocomplete and e
 ### `ProgressLog`
 
 Weight and measurement tracking over time.
+
+### `WorkoutLog`
+
+Workout session records — tracks individual training sessions with type, duration, and calories burned.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID | Primary key |
+| `user_id` | UUID FK | |
+| `workout_date` | Date | |
+| `workout_type` | String | gym, cardio, yoga, running, etc. |
+| `workout_name` | String | |
+| `duration_minutes` | Integer | |
+| `intensity` | String | light, moderate, intense |
+| `calories_burned` | Numeric | |
+| `completed` | Boolean | |
+| `started_at` | DateTime | |
+| `ended_at` | DateTime | |
+
+### `SleepLog`
+
+Daily sleep records — tracks bedtime, wake time, duration, and quality.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID | Primary key |
+| `user_id` | UUID FK | |
+| `sleep_date` | Date | |
+| `bed_time` | DateTime | |
+| `wake_time` | DateTime | |
+| `sleep_duration_hours` | Numeric | |
+| `quality` | String | poor, fair, good, excellent |
+| `wake_up_count` | Integer | Number of times woken during the night |
+| `deep_sleep_hours` | Numeric | |
+| `rem_sleep_hours` | Numeric | |
+
+### `HealthEvent`
+
+Health symptom and event tracking — stores symptoms, illnesses, and health measurements.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID | Primary key |
+| `user_id` | UUID FK | |
+| `event_date` | Date | |
+| `event_type` | String | symptom, illness, recovery, measurement, note |
+| `category` | String | digestive, muscular, metabolic, respiratory, other |
+| `description` | Text | |
+| `severity` | String | mild, moderate, severe |
+| `resolved` | Boolean | |
+| `extracted_at` | DateTime | When the event was extracted from chat |
+
+### `MuscleSoreness`
+
+Delayed onset muscle soreness (DOMS) tracking — records sore muscle groups after workouts.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID | Primary key |
+| `user_id` | UUID FK | |
+| `log_date` | Date | |
+| `sore_areas` | ARRAY(String) | Body regions experiencing soreness |
+| `pain_level` | Integer | 1–10 scale |
+| `soreness_type` | String | acute, delayed, chronic, injury |
+| `is_recovered` | Boolean | |
+| `recovered_at` | DateTime | |
 
 ### `AgentRun`
 

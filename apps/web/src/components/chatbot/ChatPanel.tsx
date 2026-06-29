@@ -7,10 +7,12 @@ import { ChatMessageList } from "./ChatMessageList";
 import { ChatInput } from "./ChatInput";
 import { ChatSessionSidebar } from "./ChatSessionSidebar";
 import { ChatCardContainer, UpdateProposalCard } from "./cards";
+import { MealConfirmationCard } from "./MealConfirmationCard";
 import type { ChatMessage, ChatSession, StaleSessionWarning, MealLogCardData } from "./types";
 import type { ChatCard, ChatCardResponse } from "./types";
 import type { DepthMode } from "./DepthSelector";
 import type { UpdateProposal } from "@/types/update-proposal";
+import type { MealConfirmationCardData } from "./MealConfirmationCard";
 
 interface ChatPanelProps {
   isOpen: boolean;
@@ -31,6 +33,12 @@ interface ChatPanelProps {
   proposalLoading: string | null;
   onConfirmProposal: (proposalId: string) => void;
   onRejectProposal: (proposalId: string) => void;
+  // Meal confirmation state
+  pendingMeal: MealConfirmationCardData | null;
+  mealPhase: "idle" | "loading" | "has_data" | "confirming" | "confirmed" | "error";
+  mealError: string | null;
+  onConfirmMeal: (logId: string, finalData: import("./MealConfirmationCard").ExtractedData) => Promise<void>;
+  onCancelMeal: (logId: string) => void;
   // Handlers
   onInputChange: (value: string) => void;
   onSend: () => void;
@@ -68,6 +76,11 @@ export function ChatPanel({
   proposalLoading,
   onConfirmProposal,
   onRejectProposal,
+  pendingMeal,
+  mealPhase,
+  mealError,
+  onConfirmMeal,
+  onCancelMeal,
   onInputChange,
   onSend,
   onDepthChange,
@@ -220,6 +233,19 @@ export function ChatPanel({
                   isLoading={proposalLoading === proposal.proposal_id}
                 />
               ))}
+            </AnimatePresence>
+
+            {/* Meal Confirmation Card */}
+            <AnimatePresence>
+              {pendingMeal && mealPhase !== "idle" && mealPhase !== "loading" && (
+                <div className="px-1 pb-1">
+                  <MealConfirmationCard
+                    data={pendingMeal}
+                    onConfirm={onConfirmMeal}
+                    onCancel={onCancelMeal}
+                  />
+                </div>
+              )}
             </AnimatePresence>
 
             {/* Input */}

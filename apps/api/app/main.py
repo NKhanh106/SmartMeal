@@ -31,7 +31,7 @@ from app.core.config import settings
 from app.core.rate_limiter import limiter
 from app.core.cache import get_redis, cache_close
 
-# Setup structured logging when not in debug mode
+# Setup structured logging in production
 ENV = os.getenv("ENVIRONMENT", "development")
 if ENV == "production":
     from app.core.logging_config import setup_logging
@@ -52,7 +52,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Redis unavailable — running without cache: {e}")
 
-    # FIX-6 A4: Start the extractor queue worker.
+    # Start the extractor queue worker.
     # This runs as a tracked background task inside the worker process.
     # Each gunicorn worker starts its own worker loop — all share the Redis queue.
     # The worker blocks on BRPOP, so it uses no CPU when idle.

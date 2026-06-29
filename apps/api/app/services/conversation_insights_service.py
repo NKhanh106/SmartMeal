@@ -167,7 +167,7 @@ async def upsert_conversation_insights(
     if not insights:
         return []
 
-    # Batch upsert: execute all inserts first, then fetch in one query (fixes N+1)
+    # Batch upsert: execute all inserts first, then fetch in one query
     for item in insights:
         stmt = pg_insert(ConversationInsight).values(
             user_id=user_id,

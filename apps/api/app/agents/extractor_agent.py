@@ -10,11 +10,10 @@ Trigger:
 - After every user message (async, non-blocking)
 - Also runs on session end to update conversation_summary
 
-PHASE 1 FIX (C2):
+Architecture:
 - ExtractorAgent is the SINGLE source of truth for both:
-    1. UserMemory.key_facts (JSONB) — via _update_memory()
+    1. UserMemory.key_facts (JSONB) — via MemoryWriteEngine
     2. ConversationInsight table (SQL) — via upsert_conversation_insights()
-- _bg_extract_insights has been removed from service.py
 """
 
 import json
@@ -222,13 +221,13 @@ Rules:
                     memory_updates["conversation_summary"] = summary_text
 
             # 7. Apply memory updates via centralized MemoryWriteEngine
-            # OPTIMIZE-1 B2: Route through MemoryWriteEngine instead of direct _update_memory().
+            # Route through MemoryWriteEngine instead of direct _update_memory().
             # This is the single write authority — _update_memory() bypasses it.
             # Use commit_with_session(db) for atomicity with _mark_session_extracted.
             try:
                 engine = memory_write_engine(context.user.id, AsyncSessionLocal)
                 if memory_updates:
-                    authorized = engine.apply("extractor", memory_updates)
+                    authorized = await engine.apply("extractor", memory_updates)
                     if not authorized:
                         logger.warning(
                             "[Extractor] MemoryWriteEngine blocked some writes for user %s",
@@ -238,7 +237,7 @@ Rules:
                         await engine.commit_with_session(db)
                 await self._mark_session_extracted(context.session_id, db)
 
-                # PHASE 1 FIX (C2): Write ConversationInsight records from the SAME extracted data.
+                # Write ConversationInsight records from the SAME extracted data.
                 # This replaces the removed _bg_extract_insights background task.
                 # ConversationInsight is the SQL table for structured facts that the chatbot context
                 # builder loads for personalization. key_facts in UserMemory is the JSONB mirror.
@@ -257,8 +256,7 @@ Rules:
                                 len(insights), context.user.id, context.session_id
                             )
                     except Exception as insight_err:
-                        # OPTIMIZE-1 B4: Nâng cấp lên error — failure của insight write
-                        # là dấu hiệu data loss tiềm ẩn, không phải warning nhẹ.
+                        # Insight write failure is a data loss risk, not a minor warning.
                         logger.error(
                             "[Extractor] ConversationInsight write failed for user %s session %s: %s",
                             context.user.id, context.session_id, insight_err
@@ -379,54 +377,6 @@ Rules:
             if valid_meals:
                 updates["recent_meals"] = valid_meals
 
-        # ── Body State ───────────────────────────────────────────────────────────
-        body_state = extracted.get("body_state") or {}
-        if body_state:
-            existing_snapshot = {}
-            if context.memory:
-                existing_snapshot = dict(context.memory.body_snapshot or {})
-
-            # Sore areas: ADD new areas, don't replace (unless user says no longer sore)
-            new_sore_areas = body_state.get("sore_areas") or []
-            if new_sore_areas:
-                existing_sore = existing_snapshot.get("sore_areas") or []
-                merged_sore = self._merge_sore_areas(existing_sore, new_sore_areas)
-                body_state["sore_areas"] = merged_sore
-
-            # Only update weight if explicitly stated (will be handled separately)
-            if "weight_kg" in body_state:
-                weight_val = body_state.get("weight_kg")
-                if isinstance(weight_val, (int, float)):
-                    body_state["weight_updated_at"] = today
-                else:
-                    del body_state["weight_kg"]
-
-            existing_snapshot.update(body_state)
-            existing_snapshot["last_updated"] = datetime.now(timezone.utc).isoformat()
-            updates["body_snapshot"] = existing_snapshot
-
-        # ── Health Events ───────────────────────────────────────────────────────
-        health_events = extracted.get("health_events") or []
-        if health_events:
-            valid_events = []
-            for event in health_events:
-                if not isinstance(event, dict):
-                    continue
-                desc = event.get("description", "")
-                if not desc:
-                    continue
-                valid_events.append({
-                    "date": event.get("date") or today,
-                    "type": event.get("type", "symptom"),
-                    "category": event.get("category", "other"),
-                    "description": desc,
-                    "severity": event.get("severity", "mild"),
-                    "resolved": False,
-                    "source_session_id": context.session_id,
-                })
-            if valid_events:
-                updates["health_events"] = valid_events
-
         # ── Facts (key_facts upsert) ───────────────────────────────────────────
         facts = extracted.get("facts") or []
         if facts:
@@ -446,34 +396,6 @@ Rules:
             if valid_facts:
                 updates["key_facts"] = valid_facts
 
-        # ── Fitness ─────────────────────────────────────────────────────────────
-        fitness = extracted.get("fitness") or {}
-        if fitness:
-            existing_fitness = {}
-            if context.memory and context.memory.fitness_memory:
-                existing_fitness = dict(context.memory.fitness_memory)
-
-            # Merge new workout info
-            if fitness.get("workout_type"):
-                existing_fitness["last_workout_date"] = today
-            if fitness.get("new_sore_areas"):
-                existing_sore = existing_fitness.get("current_restrictions", [])
-                if not isinstance(existing_sore, list):
-                    existing_sore = []
-                for area in fitness["new_sore_areas"]:
-                    if not any(r.get("area") == area for r in existing_sore):
-                        existing_sore.append({
-                            "area": area,
-                            "reason": "muscle_soreness",
-                            "since": today,
-                        })
-                existing_fitness["current_restrictions"] = existing_sore
-            if fitness.get("workout_type"):
-                existing_fitness["preferred_workout_types"] = [fitness["workout_type"]]
-
-            existing_fitness.update({k: v for k, v in fitness.items() if v is not None})
-            updates["fitness_memory"] = existing_fitness
-
         return updates
 
     def _build_conversation_insights(
@@ -482,7 +404,7 @@ Rules:
         today: str,
     ) -> list[ExtractedInsightItem]:
         """
-        PHASE 1 FIX (C2): Convert extracted 'facts' into ConversationInsight schema.
+        Convert extracted 'facts' into ConversationInsight schema.
 
         Maps EXTRACTION_SCHEMA categories to ConversationInsight.insight_type values:
           allergy, food_reaction  → "health_constraint"
@@ -531,18 +453,6 @@ Rules:
             ))
 
         return insights
-
-    def _merge_sore_areas(
-        self,
-        existing: list[str],
-        new: list[str],
-    ) -> list[str]:
-        """Add new sore areas to existing list without duplicates."""
-        result = list(existing)
-        for area in new:
-            if area not in result:
-                result.append(area)
-        return result
 
     async def _summarize_session(
         self,

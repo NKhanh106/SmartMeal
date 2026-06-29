@@ -36,6 +36,8 @@ class DailyMealSummary(BaseModel):
     total_fat_g: Decimal
 
     note: Optional[str] = None
+    source: Optional[str] = None
+    status: Optional[str] = None
 
 
 class DailyDashboardResponse(BaseModel):
@@ -55,6 +57,7 @@ class DailyDashboardResponse(BaseModel):
     fat_progress: MacroProgress
 
     meal_count: int
+    auto_detected_count: int = 0
     meals: list[DailyMealSummary]
 
 

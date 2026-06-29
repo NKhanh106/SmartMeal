@@ -1,6 +1,9 @@
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+
+logger = logging.getLogger(__name__)
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -228,7 +231,7 @@ async def send_message_stream(
             user_message=payload.content,
             session_id=session_id,
             user=current_user,
-            db=db,  # closed above — only used for non-DB cleanup paths now
+            db=db,
             session_factory=AsyncSessionLocal,
             depth=payload.depth,
         ),
@@ -339,7 +342,7 @@ async def confirm_update_proposal(
     Uses atomic GETDEL to prevent race conditions when two confirm requests race.
     """
     redis = await get_redis()
-    proposal_key = f"proposal:{current_user.id}:{proposal_id}"
+    proposal_key = f"smartmeal:proposal:{current_user.id}:{proposal_id}"
 
     # Atomic get-and-delete: prevents race condition between concurrent confirm requests
     raw = await redis.getdel(proposal_key)
@@ -361,7 +364,9 @@ async def confirm_update_proposal(
     if str(proposal.session_id) != str(session_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Session mismatch.")
 
-    result = await execute_confirmed_update(proposal, int(current_user.id), db)
+    # user_id is UUID (User.id is UUID type) - pass directly to writers
+    # Writers handle UUID|int|str via _user_uuid helper
+    result = await execute_confirmed_update(proposal, current_user.id, db)
 
     return {
         "success": result.success,
@@ -378,6 +383,9 @@ async def reject_update_proposal(
     current_user: User = Depends(get_current_user),
 ):
     """User rejected an update proposal — clean up from Redis."""
-    redis = await get_redis()
-    await redis.delete(f"proposal:{current_user.id}:{proposal_id}")
-    return {"success": True, "message": "Da bo qua"}
+    try:
+        redis = await get_redis()
+        await redis.delete(f"smartmeal:proposal:{current_user.id}:{proposal_id}")
+    except Exception as e:
+        logger.warning(f"Failed to delete proposal from Redis: {e}")
+    return {"success": True, "message": "Đã bỏ qua"}

@@ -5,13 +5,13 @@ import {
   MealConfirmationCard,
   MealConfirmationCardData,
   ExtractedData,
-} from "./cards/MealConfirmationCard";
+} from "./MealConfirmationCard";
 
 // ─── API Layer ─────────────────────────────────────────────────────────────────
 
 const API_BASE =
   (typeof window !== "undefined"
-    ? (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api/v1")
+    ? `${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"}/api/v1`
     : "http://localhost:8000/api/v1");
 
 function getToken(): string {
@@ -28,24 +28,39 @@ async function fetchPendingMealLogs(): Promise<MealConfirmationCardData[]> {
 
 async function submitConfirmation(
   logId: string,
-  finalData: ExtractedData
+  finalData: ExtractedData,
+  timeoutMs = 15000
 ): Promise<MealConfirmationCardData> {
-  const res = await fetch(`${API_BASE}/nutrition/pending/${logId}/confirm`, {
-    method: "PATCH",
-    headers: {
-      Authorization: `Bearer ${getToken()}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ updated_data: finalData }),
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(
-      (body as { detail?: string }).detail ??
-        `Xác nhận thất bại (HTTP ${res.status})`
-    );
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(`${API_BASE}/nutrition/pending/${logId}/confirm`, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${getToken()}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ updated_data: finalData }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(
+        (body as { detail?: string }).detail ??
+          `Xác nhận thất bại (HTTP ${res.status})`
+      );
+    }
+    return res.json();
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error("Yêu cầu bị timeout. Vui lòng thử lại.");
+    }
+    throw err;
   }
-  return res.json();
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -105,7 +120,7 @@ export function useMealConfirmation(options: UseMealConfirmationOptions = {}) {
   const [pollCount, setPollCount] = useState(0);
 
   // ── Bước 1: Bắt đầu polling sau SSE ──────────────────────────────────────
-  const startPolling = useCallback(async () => {
+  const startPolling = useCallback(async (trigger?: number) => {
     setPhase("loading");
     setError(null);
     setPollCount(0);
@@ -133,13 +148,17 @@ export function useMealConfirmation(options: UseMealConfirmationOptions = {}) {
   // ── Bước 2: Xác nhận ────────────────────────────────────────────────────────
   const handleConfirm = useCallback(
     async (logId: string, finalData: ExtractedData) => {
+      console.log("DEBUG handleConfirm called:", logId, finalData);
       setPhase("confirming");
       try {
+        console.log("DEBUG calling API with:", logId);
         const confirmed = await submitConfirmation(logId, finalData);
+        console.log("DEBUG API success:", confirmed);
         setMeal(confirmed);
         setPhase("confirmed");
         onConfirmed?.(confirmed);
       } catch (err) {
+        console.error("DEBUG API error:", err);
         setError(
           err instanceof Error ? err.message : "Xác nhận thất bại."
         );
@@ -153,9 +172,13 @@ export function useMealConfirmation(options: UseMealConfirmationOptions = {}) {
   // ── Bước 3: Hủy ────────────────────────────────────────────────────────────
   const handleCancel = useCallback(
     (logId: string) => {
+      console.log("DEBUG handleCancel called:", logId);
+      // Reset state immediately
       setPhase("idle");
       setMeal(null);
       setError(null);
+      setPollCount(0);
+      // Call callback
       onCancelled?.(logId);
     },
     [onCancelled]

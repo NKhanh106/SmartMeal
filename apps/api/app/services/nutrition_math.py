@@ -75,7 +75,6 @@ KCAL_PER_G_FAT        = 9
 MINIMUM_CALORIE_FLOOR_FACTOR = 1.0  # BMR × 1.0 (no deficit below BMR)
 
 # Upper sanity bounds — prevent absurd values from reaching the database
-# A-5 fix: no upper bound on TDEE/macros was a MEDIUM risk
 MAX_REASONABLE_CALORIES = 6000   # kcal — base cap; dynamically scaled for extreme obesity
 MAX_REASONABLE_PROTEIN_G = 300   # g/day
 MAX_REASONABLE_FAT_G = 200        # g/day
@@ -176,7 +175,7 @@ def apply_goal_adjustment(tdee: float, bmr: float, goal_type: str) -> float:
     if goal == "deficit":
         adjustment = DEFICIT_CAL_ADJUSTMENT
         raw_target = tdee + adjustment
-        # FIX-9: Align math floor with data_writers.MIN_DAILY_CALORIES hard floor (1000 kcal).
+        # Align math floor with data_writers.MIN_DAILY_CALORIES hard floor (1000 kcal).
         clinical_min = max(raw_target, bmr * MINIMUM_CALORIE_FLOOR_FACTOR, 1000)
         return clinical_min
 
@@ -268,8 +267,7 @@ def calculate_macro_targets(
     # ── Step 4: Macro split ────────────────────────────────────────────────────
     protein_g, carb_g, fat_g = calculate_macros(target_calories, weight_kg)
 
-    # ── A-5 fix: Upper sanity bounds on computed values ───────────────────────
-    # FIX-9: Scale max dynamically for extreme hyper-obesity profiles
+    # ── Clamp computed values to safe upper bounds ──────────────────────────────
     dynamic_max_cal = max(6000, int(bmr * 1.5))
     protein_g = min(protein_g, MAX_REASONABLE_PROTEIN_G)
     fat_g = min(fat_g, MAX_REASONABLE_FAT_G)

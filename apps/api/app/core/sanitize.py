@@ -43,7 +43,7 @@ def sanitize_for_prompt(
     - Control characters and null bytes
     - Excessively long inputs (truncated to max_length)
 
-    Processing order (FIX-7):
+    Processing order:
       1. Unicode NFKC normalization — defeats homoglyph / mixed-script tricks
       2. Strip null / control chars
       3. Apply ALL INJECTION_PATTERNS regex filters
@@ -65,19 +65,19 @@ def sanitize_for_prompt(
     if not text:
         return ""
 
-    # FIX-7 Step 1 (V-9): Normalize Unicode — collapses homoglyphs
+    # Step 1: Normalize Unicode — collapses homoglyphs
     # e.g. Cyrillic 'і' → Latin 'i', full-width → half-width, etc.
     text = unicodedata.normalize("NFKC", text)
 
-    # FIX-7 Step 2: Strip null bytes and other control characters
+    # Step 2: Strip null bytes and other control characters
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
 
-    # FIX-7 Step 3 (V-1, V-3): Apply ALL injection filters BEFORE truncation.
+    # Step 3: Apply ALL injection filters BEFORE truncation.
     # This prevents boundary-spanning payloads from slipping through the cut.
     for pattern in INJECTION_PATTERNS:
         text = pattern.sub("[filtered]", text)
 
-    # FIX-7 Step 4: Truncate only after the text is clean
+    # Step 4: Truncate only after the text is clean
     if len(text) <= max_length:
         return text.strip()
 

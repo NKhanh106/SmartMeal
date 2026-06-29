@@ -17,12 +17,12 @@ class Base(DeclarativeBase):
 
 
 engine = create_async_engine(
-    # OPTIMIZE-ASYNC-1: ASYNC_DATABASE_POOL_URL uses PgBouncer port 6543 (transaction mode).
+    # ASYNC_DATABASE_POOL_URL uses PgBouncer port 6543 (transaction mode).
     # Alembic uses ASYNC_DATABASE_URL directly with DATABASE_URL (Direct port 5432).
     settings.ASYNC_DATABASE_POOL_URL,
     echo=False,
     future=True,
-    # FIX-8 (C-1): pool_size=4, max_overflow=12 per worker.
+    # pool_size=4, max_overflow=12 per worker.
     # Per-worker ceiling: 4 + 12 = 16 connections.
     # 4 workers × 16 = 64 max — safely below Supabase free tier (60).
     pool_size=4,
@@ -34,7 +34,7 @@ engine = create_async_engine(
         "server_settings": {
             "application_name": "smartmeal_backend",
         },
-        # OPTIMIZE-ASYNC-1: Disable prepared statement caching for asyncpg.
+        # Disable prepared statement caching for asyncpg.
         # Required for compatibility with PgBouncer in transaction mode (STATEMENT
         # pooling is not supported; prepared statements are parsed per-connection).
         "statement_cache_size": 0,

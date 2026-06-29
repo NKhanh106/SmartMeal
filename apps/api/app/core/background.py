@@ -84,15 +84,14 @@ def create_tracked_task(coro: Awaitable, task_name: str) -> asyncio.Task:
 
 async def extractor_queue_worker_loop() -> None:
     """
-    FIX-6 A4: Background worker that polls the Redis extraction queue.
+    Background worker that polls the Redis extraction queue.
 
-    Replaces the fire-and-forget create_tracked_task() pattern which raced with
-    the main request's transaction. This worker runs in a dedicated background task
-    (or can be run as a separate process). It blocks on BRPOP, processes one
-    extraction at a time, and stores proposals in Redis for SSE emission.
+    This worker runs in a dedicated background task inside each worker process.
+    It blocks on BRPOP, processes one extraction at a time, and stores proposals
+    in Redis for SSE emission to the frontend.
 
     The orchestrator drains proposals from Redis after the main response completes,
-    ensuring extraction always happens AFTER the request commit — no more race.
+    ensuring extraction always happens AFTER the request commit.
     """
     from app.core.extractor_queue import extractor_dequeue, extractor_enqueue_proposal
     from app.db.session import AsyncSessionLocal
@@ -101,7 +100,7 @@ async def extractor_queue_worker_loop() -> None:
     from app.models.user import User
     from app.models.meal import MealLog
     from app.models.enums import MealLogStatus, MealLogSourceType, MealTypeEnum
-    from app.proposal_builder import build_proposals_from_extraction
+    from app.agents.proposal_builder import build_proposals_from_extraction
     from sqlalchemy import select
     from uuid import UUID
     from datetime import datetime
@@ -118,7 +117,7 @@ async def extractor_queue_worker_loop() -> None:
             task.user_id, task.session_id
         )
 
-        # FIX-6: Retry loop for transient failures (DB timeout, AI error, connection pool)
+        # Retry loop for transient failures (DB timeout, AI error, connection pool)
         success = False
         for attempt in range(3):
             try:
@@ -172,11 +171,11 @@ async def extractor_queue_worker_loop() -> None:
 
                     if result.memory_updates:
                         engine = memory_write_engine(task.user_id, AsyncSessionLocal)
-                        authorized = engine.apply("extractor", result.memory_updates)
+                        authorized = await engine.apply("extractor", result.memory_updates)
                         if authorized and engine.has_pending():
                             await engine.commit_with_session(db)
 
-                    # FIX-6 PENDING STATE: Create MealLog records for extracted meals.
+                    # Create MealLog records for extracted meals.
                     # Status = PENDING so Frontend can show confirmation UI before
                     # calories are actually committed. recalculate_daily_metrics
                     # is intentionally NOT called here — it runs only on APPROVE.
@@ -206,10 +205,11 @@ async def extractor_queue_worker_loop() -> None:
                         new_log = MealLog(
                             user_id=researcher_user.id,
                             meal_type=MealTypeEnum(meal_type_value),
-                            meal_time=datetime.fromisoformat(
-                                meal.get("date", datetime.utcnow().strftime("%Y-%m-%d"))
+                            meal_time=(
+                                datetime.fromisoformat(meal.get("date") or "")
+                                if meal.get("date")
+                                else datetime.utcnow()
                             ).replace(tzinfo=None),
-                            source=MealLogSourceType.chat_extraction,
                             status=MealLogStatus.PENDING,
                             extracted_data={
                                 "items": raw_items,
@@ -224,7 +224,7 @@ async def extractor_queue_worker_loop() -> None:
                             total_protein_g=total_prot,
                             total_carb_g=total_carb,
                             total_fat_g=total_fat,
-                            ai_model=settings.LLM_MODEL_NAME,
+                            ai_model=settings.GROQ_TEXT_MODEL,
                             ai_confidence=result.confidence,
                         )
                         db.add(new_log)

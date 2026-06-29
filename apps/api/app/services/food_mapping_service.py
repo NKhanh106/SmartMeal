@@ -47,7 +47,7 @@ def normalize_vietnamese(text: str) -> str:
         for char in text.lower().strip():
             cat = unicodedata.category(char)
             # Strip combining diacritical marks (category starts with M)
-            if cat.startswith("M") and cat != "Mn":  # skip markup
+            if cat.startswith("M") and cat != "Mn":
                 continue
             normalized += char
         return normalized
@@ -310,10 +310,10 @@ def calculate_nutrition_per_item(
     """Calculate nutrition for a food at a given weight."""
     if food is None:
         return {"calories": 0.0, "protein_g": 0.0, "carb_g": 0.0, "fat_g": 0.0}
-    ratio = weight_g / 100.0
+    ratio = float(weight_g) / 100.0
     return {
-        "calories": round(food.calories_per_100g * ratio, 2),
-        "protein_g": round(food.protein_per_100g * ratio, 2),
-        "carb_g": round(food.carb_per_100g * ratio, 2),
-        "fat_g": round(food.fat_per_100g * ratio, 2),
+        "calories": round(float(food.calories_per_100g) * ratio, 2),
+        "protein_g": round(float(food.protein_per_100g) * ratio, 2),
+        "carb_g": round(float(food.carb_per_100g) * ratio, 2),
+        "fat_g": round(float(food.fat_per_100g) * ratio, 2),
     }

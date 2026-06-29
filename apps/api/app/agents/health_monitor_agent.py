@@ -278,7 +278,9 @@ class HealthMonitorAgent(BaseAgent):
                         "Tôi thấy bạn đang trải qua điều rất khó khăn. "
                         "Bạn có muốn nói chuyện với chuyên gia tâm lý không? "
                         "Đường dây hỗ trợ sức khỏe tâm thần 24/7: "
-                        "1800 599 920 (miễn phí)."
+                        "0963 061 414 (Ngày Mai, miễn phí), "
+                        "0909 658 035 / 0784 604 598 (Chăm sóc Sức khỏe Việt), "
+                        "024 3576 5344 (Viện Tâm thần Quốc gia)."
                     ),
                     trigger_reason="mental_health_crisis",
                     skippable=False,
@@ -297,14 +299,16 @@ class HealthMonitorAgent(BaseAgent):
                         "fitness_clearance": {
                             "cleared_for": [],
                             "avoid": ["all_exercise"],
-                            "reason": "Can ho tro tam ly truoc"
+                            "reason": "Cần hỗ trợ tâm lý trước"
                         },
                         "nutritional_needs": {"increase": [], "decrease": [], "avoid": []},
                         "alerts": [{
                             "level": "urgent",
                             "message": (
-                                "Phat hien dau hieu khung hoang tam ly. "
-                                "Duong day ho tro: 1800 599 920 (24/7, mien phi)"
+                                "Phát hiện dấu hiệu khủng hoảng tâm lý. "
+                                "Đường dây hỗ trợ: 0963 061 414 (Ngày Mai, 24/7, miễn phí), "
+                                "0909 658 035 / 0784 604 598 (Chăm sóc Sức khỏe Việt), "
+                                "024 3576 5344 (Viện Tâm thần Quốc gia)."
                             )
                         }],
                     },
@@ -315,7 +319,8 @@ class HealthMonitorAgent(BaseAgent):
                         "MH CRISIS DETECTED. "
                         "Do NOT provide nutrition or fitness advice. "
                         "User needs emotional support and professional help. "
-                        "Crisis hotline: 1800 599 920"
+                        "Crisis hotline: 0963 061 414 (Ngay Mai, 24/7), "
+                        "0909 658 035 (Cham soc Suc khoe Viet)."
                     ),
                     memory_updates={},
                 )

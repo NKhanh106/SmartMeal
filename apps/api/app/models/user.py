@@ -53,6 +53,10 @@ class User(Base):
     workout_plans = relationship("WorkoutPlan", back_populates="user", cascade="all, delete")
     progress_logs = relationship("ProgressLog", back_populates="user", cascade="all, delete")
     meal_logs = relationship("MealLog", back_populates="user", cascade="all, delete")
+    health_events = relationship("HealthEvent", back_populates="user", cascade="all, delete")
+    muscle_soreness = relationship("MuscleSoreness", back_populates="user", cascade="all, delete")
+    workout_logs = relationship("WorkoutLog", back_populates="user", cascade="all, delete")
+    sleep_logs = relationship("SleepLog", back_populates="user", cascade="all, delete")
 
     __table_args__ = (
         CheckConstraint("role IN ('user', 'admin')", name="chk_users_role"),

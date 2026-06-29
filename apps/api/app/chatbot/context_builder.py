@@ -130,7 +130,8 @@ def build_health_context(profile: UserProfile | None) -> str:
     # Cuisine Preferences
     cuisines = getattr(profile, "cuisine_preferences", None)
     if cuisines and isinstance(cuisines, list):
-        sections.append(f"Preferred cuisines: {', '.join(cuisines)}")
+        items = [c if isinstance(c, str) else c.get("name", "") for c in cuisines]
+        sections.append(f"Preferred cuisines: {', '.join(items)}")
 
     # Sleep
     sleep_hours = getattr(profile, "sleep_duration_hours", None)
@@ -254,9 +255,8 @@ async def build_chatbot_context(
         "recent_chat_history": [
             {
                 "role": msg.role,
-                # FIX-7 (V-5, V-2): sanitize every historical message content
-                # before it enters the prompt. Cumulative multi-turn injection
-                # and stored-persistent injection via chat history are both blocked.
+                # Sanitize every historical message content before it enters the prompt.
+                # Blocks cumulative multi-turn injection and stored-persistent injection via history.
                 "content": sanitize_for_prompt(msg.content, max_length=500),
                 "created_at": msg.created_at,
             }
@@ -265,8 +265,8 @@ async def build_chatbot_context(
     }
 
     if profile:
-        # FIX-7 (V-2): Sanitize ALL free-text fields before they reach the AI prompt.
-        # Stored-persistent injection via profile fields is blocked here.
+        # Sanitize ALL free-text fields before they reach the AI prompt.
+        # Blocks stored-persistent injection via profile fields.
         # Guard: skip sanitization for non-string values (Enum, int, float, None).
         def _safe(text, limit=500):
             if isinstance(text, str):
@@ -294,11 +294,7 @@ async def build_chatbot_context(
                 for d in (profile.disliked_foods or [])
             ],
             "disliked_foods_text": _safe(profile.disliked_foods_text, 500),
-            "preferred_foods": [
-                {**p, "name": _safe(p.get("name", ""), 200)}
-                if isinstance(p, dict) else _safe(str(p), 200)
-                for p in (profile.preferred_foods or [])
-            ],
+            "preferred_foods": _safe(profile.preferred_foods_text, 500) if profile.preferred_foods_text else "",
             "preferred_foods_text": _safe(profile.preferred_foods_text, 500),
             # Long free-text notes — the primary stored-injection vector
             "health_note": _safe(profile.health_note, 500),
@@ -367,7 +363,7 @@ async def build_chatbot_context(
 
     # ── Conversation Insights ───────────────────────────────────────────────────
     active_insights = await get_active_insights(db=db, user_id=user_id)
-    # FIX-7 (V-2): conversation_insights are AI-extracted from user messages,
+    # Conversation insights are AI-extracted from user messages,
     # so sanitize the free-text fields before they re-enter the prompt.
     if active_insights:
         context["conversation_insights"] = [

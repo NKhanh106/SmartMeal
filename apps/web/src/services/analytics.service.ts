@@ -18,7 +18,7 @@ export const analyticsService = {
    * GET /api/v1/dashboard/today — today's nutrition dashboard for current user
    */
   async getDailyDashboard(date?: string): Promise<DailyDashboardResponse> {
-    const qs = date ? `?date=${date}` : "";
+    const qs = date ? `?target_date=${date}` : "";
     return api.get<DailyDashboardResponse>(`${BASE}/today${qs}`);
   },
 
@@ -43,7 +43,7 @@ export const analyticsService = {
     userId: string,
     date?: string
   ): Promise<DailyDashboardResponse> {
-    const qs = date ? `?date=${date}` : "";
+    const qs = date ? `?target_date=${date}` : "";
     return api.get<DailyDashboardResponse>(
       `${BASE}/user/${userId}/today${qs}`
     );

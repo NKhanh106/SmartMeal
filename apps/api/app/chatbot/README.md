@@ -93,7 +93,7 @@ Constraint: max **1 card per response**. On card fire, stream stops and waits fo
 
 ### Sanitisation Points in Context
 
-Every free-text field passes through `sanitize_for_prompt()` before entering the AI prompt (FIX-7):
+Every free-text field passes through `sanitize_for_prompt()` before entering the AI prompt:
 
 - All `UserProfile` free-text fields (nested JSONB values included).
 - All `ConversationInsight` `summary` and `value` fields.
@@ -111,7 +111,7 @@ All `AsyncGroq` streaming calls are wrapped in `asyncio.timeout(60)` — 60-seco
 | `missing_goal` | `usage_goal` | `selected_ids[0]` |
 | `missing_weight` | `current_weight_kg` | `number_value` or `selected_ids[0]` as float |
 
-### FIX-8 DB Session Safety (C-2)
+### DB Session Safety in Streaming Responses
 
 The `process_card_response_and_stream` path uses an outer `try/finally` to guarantee `_close_stream_db()` on every exit:
 

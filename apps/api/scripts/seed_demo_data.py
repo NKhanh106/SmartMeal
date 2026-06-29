@@ -16,12 +16,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import AsyncSessionLocal, engine
 from app.models.chat import ChatMessage, ChatSession
 from app.models.conversation_insight import ConversationInsight
+from app.models.health_event import HealthEvent
 from app.models.meal import MealItem, MealLog
+from app.models.muscle_soreness import MuscleSoreness
 from app.models.nutrition_goal import NutritionGoal
 from app.models.progress_log import ProgressLog
+from app.models.sleep_log import SleepLog
 from app.models.user import User
 from app.models.user_memory import UserMemory
 from app.models.user_profile import UserProfile
+from app.models.workout_log import WorkoutLog
 from app.models.enums import (
     ActivityLevelType,
     CookingPreferenceEnum,
@@ -684,6 +688,10 @@ async def seed_demo_data():
         await db.execute(text("DELETE FROM progress_logs"))
         await db.execute(text("DELETE FROM nutrition_goals"))
         await db.execute(text("DELETE FROM user_memory"))
+        await db.execute(text("DELETE FROM health_events"))
+        await db.execute(text("DELETE FROM muscle_soreness"))
+        await db.execute(text("DELETE FROM workout_logs"))
+        await db.execute(text("DELETE FROM sleep_logs"))
         await db.execute(text("DELETE FROM user_profiles"))
         await db.execute(text("DELETE FROM users"))
         await db.commit()
@@ -1007,6 +1015,18 @@ async def seed_demo_data():
                 )
                 db.add(progress)
 
+            # ── HealthEvents: từ health_events_seed + sinh thêm triệu chứng ngẫu nhiên
+            _seed_health_events(db, user.id, idx, start_day, DAYS, udata)
+
+            # ── SleepLogs: 60 ngày dữ liệu giấc ngủ
+            _seed_sleep_logs(db, user.id, idx, start_day, DAYS, udata)
+
+            # ── WorkoutLogs: tập gym/cardio theo lịch
+            _seed_workout_logs(db, user.id, idx, start_day, DAYS, udata)
+
+            # ── MuscleSoreness: đau cơ sau tập
+            _seed_muscle_soreness(db, user.id, idx, start_day, DAYS, udata)
+
             # ── UserMemory
             # weight change tính từ modifier đã có ở trên (weekday_mod, weekend_mod)
             avg_ratio = (weekday_mod * 5 + weekend_mod * 2) / 7
@@ -1269,6 +1289,273 @@ def _calc_avg_kcal_7d(idx: int, targets: dict) -> float:
     )[idx - 1]
     avg_mod = (weekday_mod * 5 + weekend_mod * 2) / 7
     return round(targets["daily_calorie_target"] * avg_mod)
+
+
+# ─── Seed cho 4 bảng mới ────────────────────────────────────────────────────────
+
+def _seed_health_events(db, user_id, user_idx, start_day, DAYS, udata):
+    """Tạo HealthEvent từ health_events_seed + triệu chứng ngẫu nhiên."""
+    # Từ health_events_seed đã có
+    seed_events = udata.get("health_events_seed") or []
+    for event in seed_events:
+        he = HealthEvent(
+            user_id=user_id,
+            event_date=date.fromisoformat(event["date"]) if isinstance(event["date"], str) else event["date"],
+            event_type=event.get("type", "symptom"),
+            category=event.get("category"),
+            description=event.get("description", ""),
+            severity=event.get("severity"),
+            resolved=event.get("resolved", False),
+        )
+        db.add(he)
+
+    # Sinh thêm triệu chứng ngẫu nhiên theo profile
+    symptom_templates = {
+        1: [("mệt buổi chiều", "metabolic", "mild", 0.15),
+            ("đau đầu", "other", "mild", 0.10)],
+        2: [("mệt mỏi", "metabolic", "mild", 0.08)],
+        3: [("chóng mặt buổi sáng", "metabolic", "mild", 0.12)],
+        4: [("chóng mặt", "metabolic", "moderate", 0.20),
+            ("mệt mỏi", "metabolic", "moderate", 0.18)],
+        5: [],  # Khỏe mạnh
+        6: [],  # Ăn chay đều đặn
+        7: [("đau cơ nhẹ sau tập", "muscular", "mild", 0.30)],
+        8: [("đau lưng dưới", "muscular", "mild", 0.15),
+            ("mệt mỏi", "metabolic", "mild", 0.10)],
+        9: [],  # Kiểm soát tốt
+        10: [("nổi mụn", "other", "mild", 0.20),
+             ("đau bụng sau ăn", "digestive", "mild", 0.08)],
+    }
+    templates = symptom_templates.get(user_idx, [])
+    for desc, cat, sev, prob in templates:
+        for day_offset in range(DAYS):
+            day = start_day + timedelta(days=day_offset)
+            if random.random() < prob:
+                event_date = date.fromisoformat(day.isoformat())
+                # Một số sự kiện đã xảy ra rồi (resolved=True)
+                resolved = (day_offset < DAYS - 7) and random.random() < 0.5
+                he = HealthEvent(
+                    user_id=user_id,
+                    event_date=event_date,
+                    event_type="symptom",
+                    category=cat,
+                    description=desc,
+                    severity=sev,
+                    resolved=resolved,
+                )
+                db.add(he)
+
+
+def _seed_sleep_logs(db, user_id, user_idx, start_day, DAYS, udata):
+    """Tạo SleepLog 60 ngày theo profile giấc ngủ của user."""
+    # Parse giờ ngủ/thức dậy
+    sleep_schedule = udata.get("sleep_schedule", "22:00-06:00")
+    try:
+        sleep_parts = sleep_schedule.split("-")
+        sleep_hour = int(sleep_parts[0].split(":")[0])
+        wake_hour = int(sleep_parts[1].split(":")[0])
+    except (ValueError, IndexError):
+        sleep_hour, wake_hour = 22, 6
+
+    quality_map = {
+        SleepQualityEnum.poor: ("poor", 0.5, 2.0),
+        SleepQualityEnum.fair: ("fair", 1.0, 3.0),
+        SleepQualityEnum.good: ("good", 0.3, 1.0),
+        SleepQualityEnum.excellent: ("excellent", 0.1, 0.5),
+    }
+    base_quality = quality_map.get(udata.get("sleep_quality"), ("fair", 1.0, 2.0))
+    base_duration = udata.get("sleep_duration_hours", 7.0)
+
+    # Noise theo lifestyle score: thấp → ngủ không đều
+    lifestyle = udata.get("lifestyle_score", 5)
+    for day_offset in range(DAYS):
+        day = start_day + timedelta(days=day_offset)
+        day_of_week = day.weekday()
+        is_weekend = day_of_week >= 5
+
+        # Cuối tuần ngủ muộn hơn
+        offset_sleep = random.uniform(-0.5, 1.5) if is_weekend else random.uniform(-0.5, 0.5)
+        duration_noise = random.uniform(-1.0, 1.0)
+        # Lifestyle thấp → biến động nhiều hơn
+        duration_variance = (10 - lifestyle) / 10 * 1.5
+        duration = max(3.0, base_duration + duration_noise * duration_variance + offset_sleep * 0.3)
+
+        # Tính bed_time và wake_time
+        bed_hour = sleep_hour + (1 if is_weekend else 0) + random.randint(-1, 1)
+        wake_h = wake_hour + (1 if is_weekend else 0) + random.randint(-1, 1)
+
+        bed_time = datetime(day.year, day.month, day.day, bed_hour % 24,
+                            random.randint(0, 59), tzinfo=timezone.utc)
+        wake_time = datetime(day.year, day.month, day.day + (1 if wake_h >= 24 else 0),
+                            wake_h % 24, random.randint(0, 59), tzinfo=timezone.utc)
+        if wake_time <= bed_time:
+            wake_time += timedelta(days=1)
+
+        # Chất lượng
+        quality_variations = ["poor", "fair", "good", "excellent"]
+        weights = [0.1, 0.3, 0.4, 0.2] if base_quality[0] == "good" else \
+                  [0.4, 0.3, 0.2, 0.1] if base_quality[0] == "poor" else \
+                  [0.2, 0.4, 0.3, 0.1]
+        quality = random.choices(quality_variations, weights=weights)[0]
+
+        # Số lần thức giấc
+        if base_quality[0] == "poor":
+            wake_count = random.randint(1, 4)
+        elif base_quality[0] == "fair":
+            wake_count = random.randint(0, 2)
+        else:
+            wake_count = random.randint(0, 1)
+
+        sl = SleepLog(
+            user_id=user_id,
+            sleep_date=day,
+            bed_time=bed_time,
+            wake_time=wake_time,
+            sleep_duration_hours=round(duration, 2),
+            quality=quality,
+            wake_up_count=wake_count,
+            source="manual",
+            note=None,
+        )
+        db.add(sl)
+
+
+def _seed_workout_logs(db, user_id, user_idx, start_day, DAYS, udata):
+    """Tạo WorkoutLog: gym, cardio, yoga tùy profile."""
+    # Tần suất tập theo fitness_level
+    workout_schedule = {
+        1: [],  # Béo phì, ít vận động - có thể đi bộ nhẹ
+        2: [],  # Ăn kiêng nghiêm ngặt
+        3: [],  # Thiếu cân, ăn ít
+        4: [],  # Thiếu cân nghiêm trọng
+        5: [(1, 5), (1, 6)],  # Vận động viên - chạy bộ 5-6 ngày
+        6: [(1, 3)],  # Yoga 3 ngày
+        7: [(2, 6)],  # Gym 5 ngày (Thứ 2-6)
+        8: [],  # Văn phòng - ít vận động
+        9: [],  # Keto - tiểu đường
+        10: [(6, 7)],  # Sinh viên - cuối tuần thứ 7, CN
+    }
+    schedule = workout_schedule.get(user_idx, [])
+
+    workout_types_map = {
+        5: "running",
+        6: "yoga",
+        7: "gym",
+        10: "gym",
+    }
+    workout_name_map = {
+        5: "Chạy bộ buổi sáng",
+        6: "Yoga buổi sáng",
+        7: "Tập gym",
+        10: "Gym cuối tuần",
+    }
+    duration_map = {5: (30, 60), 6: (45, 90), 7: (60, 90), 10: (60, 90)}
+    cal_map = {
+        "running": (300, 500),
+        "yoga": (150, 250),
+        "gym": (400, 600),
+    }
+
+    for weekday, weekend in schedule:
+        workout_type = workout_types_map.get(user_idx, "gym")
+        workout_name = workout_name_map.get(user_idx, "Tập luyện")
+        dur_range = duration_map.get(user_idx, (45, 90))
+        cal_range = cal_map.get(workout_type, (300, 500))
+
+        for day_offset in range(DAYS):
+            day = start_day + timedelta(days=day_offset)
+            day_of_week = day.weekday()  # 0=Mon
+            train_today = False
+
+            if day_of_week < 5:  # Ngày thường
+                train_today = (day_of_week + 1) in range(1, weekday + 1) if weekday > 0 else False
+            else:  # Cuối tuần
+                weekend_active = [w for w, _ in schedule if w == 6 or w == 7]
+                train_today = day_of_week in weekend_active
+
+            if train_today:
+                duration = random.randint(*dur_range)
+                cal = random.randint(*cal_range)
+                wl = WorkoutLog(
+                    user_id=user_id,
+                    workout_date=day,
+                    workout_type=workout_type,
+                    workout_name=workout_name,
+                    duration_minutes=duration,
+                    intensity=random.choice(["light", "moderate", "intense"]),
+                    calories_burned=cal,
+                    source="manual",
+                    completed=True,
+                    started_at=datetime(day.year, day.month, day.day, 6, 0, tzinfo=timezone.utc),
+                    ended_at=datetime(day.year, day.month, day.day, 6 + duration // 60,
+                                      duration % 60, tzinfo=timezone.utc),
+                )
+                db.add(wl)
+
+
+def _seed_muscle_soreness(db, user_id, user_idx, start_day, DAYS, udata):
+    """Tạo MuscleSoreness sau các buổi tập gym."""
+    # GYM users (idx 7)
+    gym_days = [1, 2, 3, 4, 5]  # Thứ 2-6 gym
+    muscle_groups = [
+        ["chest", "triceps", "shoulders"],
+        ["back", "biceps"],
+        ["legs", "abs"],
+        ["shoulders", "arms"],
+        ["back", "chest"],
+    ]
+
+    # Chỉ tạo soreness cho người tập gym
+    if user_idx not in [5, 7, 10]:
+        return
+
+    workout_days = gym_days if user_idx == 7 else ([5, 6] if user_idx == 10 else [1, 2, 3, 4, 5])
+
+    for day_offset in range(DAYS):
+        day = start_day + timedelta(days=day_offset)
+        day_of_week = day.weekday()
+
+        if day_of_week not in workout_days:
+            continue
+
+        # Sau 1-2 ngày tập sẽ bị đau (DOMS)
+        sore_delay = random.randint(1, 2)
+        sore_day_offset = day_offset + sore_delay
+        if sore_day_offset >= DAYS:
+            continue
+
+        sore_day = start_day + timedelta(days=sore_day_offset)
+        muscle_idx = workout_days.index(day_of_week) if day_of_week in workout_days else 0
+        areas = muscle_groups[muscle_idx % len(muscle_groups)]
+
+        # Pain level giảm dần theo ngày
+        ms = MuscleSoreness(
+            user_id=user_id,
+            log_date=sore_day,
+            sore_areas=areas,
+            pain_level=random.randint(3, 7),
+            soreness_type="delayed",
+            note="Đau cơ sau tập gym",
+            is_recovered=False,
+        )
+        db.add(ms)
+
+        # Ngày hồi phục (sau 2-3 ngày)
+        recover_offset = sore_delay + random.randint(2, 3)
+        if sore_day_offset + recover_offset < DAYS:
+            recover_day = start_day + timedelta(days=sore_day_offset + recover_offset)
+            ms_recovered = MuscleSoreness(
+                user_id=user_id,
+                log_date=recover_day,
+                sore_areas=areas,
+                pain_level=random.randint(1, 2),
+                soreness_type="delayed",
+                note="Cơ bắp hồi phục",
+                is_recovered=True,
+                recovered_at=datetime(recover_day.year, recover_day.month, recover_day.day,
+                                     8, 0, tzinfo=timezone.utc),
+            )
+            db.add(ms_recovered)
 
 
 if __name__ == "__main__":

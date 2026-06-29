@@ -76,7 +76,7 @@ class AgentRun(Base):
     )
     # Values: "pending" | "running" | "completed" | "failed" | "skipped"
 
-    # Truncated summaries for debug dashboards
+    # Truncated summaries for dashboards
     input_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     output_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 

@@ -88,7 +88,7 @@ async def get_or_regenerate_with_lock(
             return result
 
     except CacheLockError:
-        # FIX-6 B4: Jittered exponential backoff instead of immediate fallback.
+        # Jittered exponential backoff instead of immediate fallback.
         # Each failed waiter retries the cache check with increasing delay + jitter.
         # This prevents the "N-1 stampede" where all waiters regenerate simultaneously.
         # Delays: ~100ms → ~500ms → ~2000ms (+ random jitter).

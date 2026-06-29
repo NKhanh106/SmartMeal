@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.factory import get_ai_provider
-from app.agents.base import AgentContext
+from app.agents.base import AgentContext, get_async_groq_client
 from app.core.sanitize import sanitize_for_prompt
 from app.agents.web_researcher_agent import (
     WebResearcherAgent,
@@ -487,7 +487,7 @@ async def send_chat_message(
         )
         session.last_activity_at = datetime.now(timezone.utc)
 
-        # ── OPTIMIZE-1 B3: Stale comment block removed ──────────────────────────────
+        # ── Legacy extraction pipelines removed ────────────────────────────────────
         # All extraction now flows through ExtractorAgent as the single authoritative
         # pipeline. The following duplicate pipelines were permanently removed:
         #   - _bg_passive_meal_extraction (AI-based)
@@ -693,9 +693,6 @@ async def process_streaming_message(
     Main entry point for streaming a chat message.
     Handles: hard-rule cards, normal AI streaming, AI-driven tool calls.
     Yields SSE strings.
-
-    OPTIMIZE-1 B1: BackgroundTasks parameter added so _bg_extractor_agent
-    dispatches here just like in the non-streaming path.
     """
     import asyncio
     import json
@@ -756,7 +753,7 @@ async def process_streaming_message(
         return  # Do NOT call AI — wait for card response
 
     # 5. Call AI with Groq streaming
-    client = AsyncGroq(api_key=settings.GROQ_API_KEY)
+    client = await get_async_groq_client()
     full_response = ""
 
     try:
@@ -821,9 +818,7 @@ async def process_streaming_message(
 
     yield f"data: {json.dumps({'done': True, 'message_id': str(user_msg.id)})}\n\n"
 
-    # OPTIMIZE-1 B1: Dispatch _bg_extractor_agent in the streaming path too.
-    # Previously extraction only ran in the non-streaming path, causing the
-    # streaming API to miss all Text-to-Meal and key_facts extraction.
+    # Dispatch _bg_extractor_agent in the streaming path too.
     if background_tasks is not None:
         background_tasks.add_task(
             _bg_extractor_agent,
@@ -925,7 +920,7 @@ async def process_card_response_and_stream(
     # All subsequent DB writes use session_factory or a local session.
     await db.close()
 
-    client = AsyncGroq(api_key=settings.GROQ_API_KEY)
+    client = await get_async_groq_client()
     full_response = ""
     _stream_db = None
 
@@ -942,10 +937,9 @@ async def process_card_response_and_stream(
     async def _close_stream_db():
         nonlocal _stream_db
         if _stream_db is not None:
-            # FIX-8 (C-2): Roll back uncommitted transaction before returning session
-            # to the pool. Handles the abnormal-disconnect case where the client
-            # aborts the SSE stream mid-transaction, leaving the session in a
-            # state that would poison the next borrow from the pool.
+            # Roll back uncommitted transaction before returning session to the pool.
+            # Handles the abnormal-disconnect case where the client aborts the SSE stream
+            # mid-transaction, leaving the session in a state that would poison the next borrow.
             try:
                 if _stream_db.is_active:
                     await _stream_db.rollback()
@@ -958,8 +952,8 @@ async def process_card_response_and_stream(
                 await _stream_db.close()
                 _stream_db = None
 
-    # FIX-8 (C-2): Outer try/finally ensures _close_stream_db() is called on
-    # EVERY exit path (timeout, JSON error, tool-call return, normal completion).
+    # Outer try/finally ensures _close_stream_db() is called on EVERY exit path
+    # (timeout, JSON error, tool-call return, normal completion).
     try:
         try:
             async with asyncio.timeout(60):
@@ -994,7 +988,7 @@ async def process_card_response_and_stream(
                                     yield f"event: card\ndata: {new_card.model_dump_json()}\n\n"
                                     return
                                 except (json.JSONDecodeError, KeyError):
-                                    # FIX-8 (C-2): JSON parse error on tool call — close session before returning
+                                    # JSON parse error on tool call — close session before returning
                                     yield f"data: {json.dumps({'error': 'invalid_tool_input'})}\n\n"
                                     return
 
@@ -1009,7 +1003,7 @@ async def process_card_response_and_stream(
             return
 
     finally:
-        # FIX-8 (C-2): ALWAYS release the stream DB session.
+        # ALWAYS release the stream DB session.
         # Covers: normal completion, timeout, tool-call return, JSON parse error, any exception.
         await _close_stream_db()
 

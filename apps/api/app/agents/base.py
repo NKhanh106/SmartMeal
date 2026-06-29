@@ -15,4 +15,5 @@ from app.agents.base_agent import (
     AgentResult,
     BaseAgent,
     _get_groq_client,
+    get_async_groq_client,
 )
