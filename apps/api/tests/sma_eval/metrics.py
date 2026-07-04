@@ -81,6 +81,7 @@ class MetricResult:
     """Kết quả của một metric đơn lẻ."""
     name: str
     score: float          # 0.0 – 1.0
+    group: str = "UNKNOWN"
     details: dict[str, Any] = field(default_factory=dict)
     passed: bool = False
 
@@ -90,6 +91,7 @@ class MetricResult:
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
+            "group": self.group,
             "score": round(self.score, 4),
             "passed": self.passed,
             **self.details,
@@ -1067,16 +1069,22 @@ class SMAMetricSuite:
         domain_quality: list[MetricResult] = []
         multi_agent: list[MetricResult] = []
 
-        for result in results:
+        for idx, result in enumerate(results):
+            # The owning metric instance carries its group classification
+            # (NUTRITION_SAFETY / DOMAIN_QUALITY / MULTI_AGENT_PERFORMANCE).
+            owning = self._metrics[idx]
             if isinstance(result, Exception):
                 # Graceful degradation: metric failed → score 0.5
                 mr = MetricResult(
                     name="UNKNOWN",
                     score=0.5,
+                    group=owning.group,
                     details={"error": str(result)},
                 )
             else:
                 mr = result  # type: ignore[assignment]
+                if mr.group == "UNKNOWN":
+                    mr.group = owning.group
 
             if mr.group == "NUTRITION_SAFETY":
                 nutrition_safety.append(mr)

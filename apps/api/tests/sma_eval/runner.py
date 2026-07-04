@@ -468,15 +468,15 @@ class DB_Assertion_Loop:
                     pending_empty: list = []
                     completed_with_payload: list = []
 
-                    for log in recent:
-                        if log.status == MealLogStatus.PENDING:
-                            if self._has_valid_payload(log):
-                                pending_with_payload.append(log)
+                    for meal_log in recent:
+                        if meal_log.status == MealLogStatus.PENDING:
+                            if self._has_valid_payload(meal_log):
+                                pending_with_payload.append(meal_log)
                             else:
-                                pending_empty.append(log)
-                        elif log.status == MealLogStatus.COMPLETED:
-                            if self._has_valid_payload(log):
-                                completed_with_payload.append(log)
+                                pending_empty.append(meal_log)
+                        elif meal_log.status == MealLogStatus.COMPLETED:
+                            if self._has_valid_payload(meal_log):
+                                completed_with_payload.append(meal_log)
 
                     log.info(
                         "[DB_Assertion] Attempt %d/%d: %d recent, "
@@ -685,6 +685,7 @@ class SMARunner:
     STREAM_ENDPOINT = "/api/v1/ai/chat/sessions/{session_id}/messages/stream"
     SESSION_ENDPOINT = "/api/v1/ai/chat/sessions"
     LOGIN_ENDPOINT = "/api/v1/auth/login"
+    REGISTER_ENDPOINT = "/api/v1/auth/register"
 
     def __init__(
         self,
@@ -704,14 +705,20 @@ class SMARunner:
         self._client: AsyncClient | None = None
 
     async def _ensure_client(self, auth_token: str) -> AsyncClient:
+        # httpx rejects "Bearer " (empty token) as an illegal header value, so
+        # only attach Authorization once a real token exists.
+        headers = (
+            {"Authorization": f"Bearer {auth_token}"} if auth_token else {}
+        )
         if self._client is None:
             self._client = AsyncClient(
                 base_url=self._base_url,
-                headers={"Authorization": f"Bearer {auth_token}"},
+                headers=headers,
                 timeout=httpx.Timeout(self._timeout_s, connect=10.0),
             )
         else:
-            self._client.headers["Authorization"] = f"Bearer {auth_token}"
+            if auth_token:
+                self._client.headers["Authorization"] = f"Bearer {auth_token}"
         return self._client
 
     async def close(self):
@@ -1156,44 +1163,39 @@ class SMARunner:
     # ── Bootstrap helpers ────────────────────────────────────────────────────
 
     async def _bootstrap_user(self) -> dict[str, str]:
-        """Tạo tạm một user để chạy benchmark → returns dict with email/password/user_id."""
+        """
+        Tạo tạm một user để chạy benchmark bằng cách gọi API register
+        (không phải SQL thẳng) — đảm bảo user nằm cùng database với
+        API process đang chạy.
+        """
         from uuid import uuid4
-        from app.core.security import get_password_hash
-        from app.models.user import User
-        from app.models.user_profile import UserProfile
-        from app.models.enums import GenderType, ActivityLevelType, DietTypeEnum
 
-        async with self._db_factory() as session:
-            user_id = str(uuid4())
-            user = User(
-                id=uuid4(),
-                email=f"sma_runner_{uuid4().hex[:8]}@sma-eval.local",
-                password_hash=get_password_hash(f"sma_pw_{uuid4().hex[:8]}"),
-                full_name="SMA Runner User",
-                role="user",
+        plain_password = f"sma_pw_{uuid4().hex[:8]}"
+        email = f"sma-runner-{uuid4().hex[:8]}@benchmark.example.com"
+
+        unauth_client = await self._ensure_client("")
+        resp = await unauth_client.post(
+            self.REGISTER_ENDPOINT,
+            json={
+                "email": email,
+                "password": plain_password,
+                "full_name": "SMA Runner User",
+            },
+        )
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(
+                f"User registration failed ({resp.status_code}): {resp.text}"
             )
-            session.add(user)
+        body = resp.json()
+        user_id = body.get("id") or body.get("user", {}).get("id")
+        if not user_id:
+            raise RuntimeError(f"Register response missing user id: {body}")
 
-            profile = UserProfile(
-                id=uuid4(),
-                user_id=user.id,
-                gender=GenderType.nam,
-                date_of_birth=datetime(1995, 1, 1).date(),
-                height_cm=175.0,
-                current_weight_kg=75.0,
-                activity_level=ActivityLevelType.van_dong_vua,
-                diet_type=DietTypeEnum.binh_thuong,
-            )
-            session.add(profile)
-            await session.commit()
-            await session.refresh(user)
-
-            return {
-                "email": user.email,
-                "password": user.password_hash[len("$2b$12$"):],
-                "user_id": str(user.id),
-                "plain_password": f"sma_pw_{uuid4().hex[:8]}",
-            }
+        return {
+            "email": email,
+            "user_id": str(user_id),
+            "password": plain_password,
+        }
 
     async def _cleanup_user(self, user_id: str) -> None:
         """Xóa bootstrap user sau khi benchmark xong."""
