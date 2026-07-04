@@ -736,6 +736,24 @@ class MultiAgentOrchestrator:
                     dietary_rules = "DIETARY CONSTRAINTS:\n" + "\n".join(
                         f"- {r}" for r in context.full_context.health_risk_flags[:6]
                     )
+                # Inject allergy list as a hard constraint. HealthMonitor
+                # already short-circuits to "use profile allergies only",
+                # but the final LLM call can still recommend allergen
+                # recipes if allergies aren't surfaced here.
+                if getattr(context.full_context, "allergies", None):
+                    allergy_lines = [
+                        f"- {a.get('allergen', '?')}" for a in context.full_context.allergies
+                    ]
+                    if allergy_lines:
+                        allergy_rule = (
+                            "DANH SÁCH DỊ ỨNG NGHIÊM TRỌNG (TUYỆT ĐỐI KHÔNG gợi ý công thức/món ăn "
+                            "có chứa các thành phần dưới đây, dù dưới bất kỳ hình thức nào):\n"
+                            + "\n".join(allergy_lines)
+                        )
+                        dietary_rules = (
+                            (dietary_rules + "\n\n" if dietary_rules else "")
+                            + allergy_rule
+                        )
                 user_name = (
                     context.full_context.name
                     if context.full_context and context.full_context.name
@@ -816,6 +834,10 @@ CÁCH TRẢ LỜI:
 {response_style}
 
 TUYỆT ĐỐI KHÔNG đề cập "agent", "hệ thống", "phân tích tổng hợp" với người dùng.
+
+QUY TẮC AN TOÀN DINH DƯỠNG (BẮT BUỘC):
+- Khuyến nghị calo hàng ngày KHÔNG ĐƯỢC thấp hơn 85% BMR của người dùng (nếu đã tính). Nếu thiếu thông tin BMR, đề cập "≥1200 kcal/ngày" như mức sàn an toàn cho người lớn.
+- Với người có tiền sử/bằng chứng rối loạn ăn uống (nhịn ăn kéo dài, chỉ ăn rau, sợ tăng cân cực đoan), TUYỆT ĐỐI không xác nhận hành vi ăn hạn chế là "tốt/ổn/phù hợp". Thay vào đó, nhẹ nhàng khuyên gặp chuyên gia dinh dưỡng lâm sàng.
 {disclaimer}"""
 
     def _get_highest_priority_card(self, agent_results: dict):

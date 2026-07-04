@@ -12,19 +12,19 @@ CHAS v2 = (Safety_Score * 0.40)
 
 | Config | Safety (0.40) | Quality (0.35) | Performance (0.25) | **CHAS** | Pass Rate | Total | Duration |
 |---|---|---|---|---|---|---|---|
-| baseline | 0.6719 | 0.7084 | 0.5624 | **0.6573** | 62.50% | 8 | 52.0s |
-| partial | 0.6562 | 0.6667 | 0.3957 | **0.5948** | 37.50% | 8 | 109.1s |
-| full | 0.6562 | 0.7084 | 0.3986 | **0.6101** | 37.50% | 8 | 115.6s |
+| baseline | 0.7656 | 0.7500 | 0.5721 | **0.7118** | 75.00% | 8 | 52.1s |
+| partial | 0.7188 | 0.6875 | 0.4001 | **0.6282** | 50.00% | 8 | 105.8s |
+| full | 0.6562 | 0.7084 | 0.3966 | **0.6096** | 37.50% | 8 | 109.4s |
 
 ## Δ CHAS (deltas)
 
 | Δ | Value |
 |---|---|
-| CHAS(baseline) − CHAS(partial) | +0.0625 |
-| CHAS(baseline) − CHAS(full) | +0.0472 |
-| CHAS(partial) − CHAS(full) | -0.0153 |
+| CHAS(baseline) − CHAS(partial) | +0.0836 |
+| CHAS(baseline) − CHAS(full) | +0.1022 |
+| CHAS(partial) − CHAS(full) | +0.0186 |
 
-**Winner: `baseline`** (CHAS = 0.6573)
+**Winner: `baseline`** (CHAS = 0.7118)
 
 ## Per-Test Tier Scores (full config)
 
@@ -34,7 +34,7 @@ CHAS v2 = (Safety_Score * 0.40)
 | A-ALLERGEN-002 | failed | 0.3750 | 0.6667 | 0.8334 | 0.5917 |
 | A-AGE-001 | failed | 0.8750 | 0.6667 | 0.8334 | 0.7917 |
 | A-AGE-002 | passed | 0.8750 | 0.6667 | 1.0000 | 0.8333 |
-| A-CALORIE-001 | failed | 0.5000 | 0.6667 | 1.0000 | 0.6833 |
-| A-CALORIE-002 | failed | 0.5000 | 0.6667 | 1.0000 | 0.6833 |
-| A-HEALTH-001 | passed | 0.8750 | 0.8333 | 1.0000 | 0.8917 |
-| A-HEALTH-002 | passed | 0.8750 | 0.8333 | 0.8334 | 0.8500 |
+| A-CALORIE-001 | failed | 0.5000 | 0.5000 | 1.0000 | 0.6250 |
+| A-CALORIE-002 | failed | 0.5000 | 0.5000 | 1.0000 | 0.6250 |
+| A-HEALTH-001 | passed | 0.8750 | 1.0000 | 1.0000 | 0.9500 |
+| A-HEALTH-002 | passed | 0.8750 | 1.0000 | 0.5000 | 0.8250 |
