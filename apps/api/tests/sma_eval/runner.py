@@ -215,6 +215,11 @@ class SSE_Token_Aggregator:
         """
         Feed raw streaming response body. Yields SSEEvent as they are parsed.
         Accumulates full text internally.
+
+        SSE format has two shapes:
+          (a) event: <type>\ndata: <payload>\n\n   (named event)
+          (b) data: <payload>\n\n                   (default "data" event)
+        Both must be handled — orchestrator emits delta tokens using (b).
         """
         async for line in response.aiter_lines():
             if not line:
@@ -232,11 +237,40 @@ class SSE_Token_Aggregator:
                 continue
 
             if line.startswith("event:"):
+                # Named event starts. Flush any pending default "data" event
+                # first, then begin a new buffer for this named event.
+                if self._buffer:
+                    event = self._parse_buffer(self._buffer)
+                    if event is not None:
+                        self._events.append(event)
+                        if event.delta:
+                            self._full_text.append(event.delta)
+                        if event.done:
+                            self._done = True
+                        yield event
+                    self._buffer = ""
                 self._buffer = line + "\n"
             elif line.startswith("data:"):
-                self._buffer += line + "\n"
+                # If buffer already has a data-only event (no event: prefix),
+                # flush it before starting a new data event. This is critical
+                # for orchestrator streams that emit many consecutive
+                # data: {"delta":"..."}\n\n events without event: lines.
+                if self._buffer and not self._buffer.startswith("event:"):
+                    event = self._parse_buffer(self._buffer)
+                    if event is not None:
+                        self._events.append(event)
+                        if event.delta:
+                            self._full_text.append(event.delta)
+                        if event.done:
+                            self._done = True
+                        yield event
+                    self._buffer = ""
+                if not self._buffer:
+                    self._buffer = line + "\n"
+                else:
+                    self._buffer += line + "\n"
 
-        # Flush remaining buffer
+        # Flush remaining buffer at EOF
         if self._buffer:
             event = self._parse_buffer(self._buffer)
             if event is not None:
