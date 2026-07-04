@@ -21,12 +21,18 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.drop_constraint(
-        "uq_health_user_date_category",
-        "health_events",
-        type_="unique",
+    # Idempotent: only drop if the constraint exists. Earlier migration 0001
+    # creates it on legacy deployments, but newer 0001 omits it. Migration
+    # 0002 is a no-op, so 0004 must tolerate both schemas.
+    op.execute(
+        "ALTER TABLE health_events "
+        "DROP CONSTRAINT IF EXISTS uq_health_user_date_category"
     )
 
 
 def downgrade() -> None:
-    pass
+    op.execute(
+        "ALTER TABLE health_events "
+        "ADD CONSTRAINT uq_health_user_date_category "
+        "UNIQUE (user_id, event_date, category)"
+    )

@@ -1328,7 +1328,7 @@ async def _main():
     # ── Resolve ablation params ───────────────────────────────────────────
     ablation_blocks = set(args.ablation_blocks or [])
     ablation = AblationParams(
-        config=args.config,
+        config=AblationConfig(args.config),
         ablate_health_monitor=(
             args.ablate_health_monitor or "health_monitor" in ablation_blocks
         ),
