@@ -597,6 +597,9 @@ class TestRunResult:
     error_message: str | None = None
     routing: str | None = None  # expected_routing từ dataset
     agent_results_summary: dict[str, Any] = field(default_factory=dict)
+    # Per-metric detail so JSON consumers can break down the 3 tier_scores
+    # into the underlying 7 individual metrics.
+    metric_details: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -644,6 +647,7 @@ class BenchmarkReport:
                     "status": r.status,
                     "overall_score": round(r.overall_score, 4),
                     "tier_scores": {k: round(v, 4) for k, v in r.tier_scores.items()},
+                    "metric_details": r.metric_details,
                     "routing": r.routing,
                     "duration_ms": r.duration_ms,
                     "db_assertion": {
@@ -1005,6 +1009,11 @@ class SMARunner:
                 duration_ms=duration_ms,
                 routing=expected_routing,
                 agent_results_summary=agent_results_summary,
+                metric_details=(
+                    [m.to_dict() for m in metric_result.nutrition_safety_metrics]
+                    + [m.to_dict() for m in metric_result.domain_quality_metrics]
+                    + [m.to_dict() for m in metric_result.multi_agent_metrics]
+                ),
             )
 
         except InfraBreakdownError as e:
