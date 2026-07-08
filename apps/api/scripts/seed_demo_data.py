@@ -33,6 +33,7 @@ from app.models.enums import (
     GenderType,
     ItemSourceType,
     MealFrequencyEnum,
+    MealLogStatus,
     MealTypeEnum,
     NutritionGoalType,
     SleepQualityEnum,
@@ -117,10 +118,10 @@ USERS = [
         usage_goal=UsageGoalEnum.weight_loss,
         target_weight=80.0,
         # JSONB fields
-        allergies=[{"id": "alg_1", "allergen": "hải sản", "severity": "nhẹ", "category": "seafood"}],
+        allergies=[{"allergen": "shellfish", "severity": "mild"}],
         dietary_restrictions=[],
         medications=[],
-        health_conditions=[{"id": "cond_1", "name": "prehypertension", "severity": "nhẹ", "status": "managed"}],
+        health_conditions=[{"condition": "hypertension", "severity": "managed"}],
         # Lifestyle
         sleep_duration_hours=6.0,
         sleep_quality=SleepQualityEnum.poor,
@@ -132,14 +133,14 @@ USERS = [
         sleep_time="23:30",
         work_schedule="08:00-20:00, 6 ngày/tuần",
         # Taste & food
-        taste_preferences={"spicy": "thích", "sweet": "thích", "salty": "thích", "sour": "trung bình", "bitter": "không thích"},
-        cuisine_preferences=[{"id": "c_1", "name": "Việt Nam", "preference": "rất thích"}],
-        disliked_foods=[{"id": "d_1", "food": "rau xanh", "reason": "không thích"}],
-        favorite_foods=[{"id": "f_1", "food": "thịt heo chiên giòn", "preference": "rất thích"}, {"id": "f_2", "food": "nước ngọt", "preference": "thích"}, {"id": "f_3", "food": "bánh kẹo", "preference": "thích"}],
+        taste_preferences={"spicy": 4, "sweet": 4, "salty": 4, "sour": 3, "bitter": 1},
+        cuisine_preferences=["vietnamese"],
+        disliked_foods=["rau xanh"],
+        favorite_foods=["thịt heo chiên giòn", "nước ngọt", "bánh kẹo"],
         disliked_foods_text="rau xanh",
         preferred_foods_text="thịt heo, đồ chiên, nước ngọt, bánh kẹo",
         allergies_text="dị ứng hải sản nhẹ",
-        eating_speed="nhanh",
+        eating_speed="fast",
         chew_difficulty=False,
         # Body / memory
         energy_level="low",
@@ -168,8 +169,8 @@ USERS = [
         target_weight=58.0,
         allergies=[],
         dietary_restrictions=[],
-        medications=[{"id": "med_1", "name": "thuốc tránh thai", "dosage": "hàng ngày", "frequency": "hàng ngày"}],
-        health_conditions=[{"id": "cond_1", "name": "postpartum_recovery", "severity": "nhẹ", "status": "recovered"}],
+        medications=[{"name": "thuốc tránh thai", "frequency": "hàng ngày"}],
+        health_conditions=[],
         sleep_duration_hours=5.5,
         sleep_quality=SleepQualityEnum.fair,
         sleep_schedule="22:30-05:30",
@@ -179,14 +180,14 @@ USERS = [
         wake_up_time="05:30",
         sleep_time="22:30",
         work_schedule="07:00-17:00, 5 ngày/tuần",
-        taste_preferences={"spicy": "trung bình", "sweet": "không thích", "salty": "trung bình", "sour": "thích", "bitter": "không thích"},
-        cuisine_preferences=[{"id": "c_1", "name": "Việt Nam", "preference": "rất thích"}, {"id": "c_2", "name": "Hàn Quốc", "preference": "thích"}],
-        disliked_foods=[{"id": "d_1", "food": "đậu phộng", "reason": "không thích"}],
-        favorite_foods=[{"id": "f_1", "food": "thịt bò", "preference": "rất thích"}, {"id": "f_2", "food": "rau củ", "preference": "thích"}, {"id": "f_3", "food": "cà phê", "preference": "thích"}],
+        taste_preferences={"spicy": 3, "sweet": 1, "salty": 3, "sour": 4, "bitter": 1},
+        cuisine_preferences=["vietnamese", "korean"],
+        disliked_foods=["đậu phộng"],
+        favorite_foods=["thịt bò", "rau củ", "cà phê"],
         disliked_foods_text="đậu phộng",
         preferred_foods_text="thịt bò, rau củ, cà phê",
         allergies_text=None,
-        eating_speed="bình thường",
+        eating_speed="normal",
         chew_difficulty=False,
         energy_level="normal",
         hydration="normal",
@@ -214,7 +215,7 @@ USERS = [
         allergies=[],
         dietary_restrictions=[],
         medications=[],
-        health_conditions=[{"id": "cond_1", "name": "underweight", "severity": "vừa", "status": "monitored"}],
+        health_conditions=[],
         sleep_duration_hours=7.5,
         sleep_quality=SleepQualityEnum.good,
         sleep_schedule="00:00-07:30",
@@ -224,14 +225,14 @@ USERS = [
         wake_up_time="07:30",
         sleep_time="00:00",
         work_schedule="08:00-16:00, 5 ngày/tuần (thực tập)",
-        taste_preferences={"spicy": "thích", "sweet": "rất thích", "salty": "trung bình", "sour": "trung bình", "bitter": "không thích"},
-        cuisine_preferences=[{"id": "c_1", "name": "Việt Nam", "preference": "rất thích"}, {"id": "c_2", "name": "Nhanh (fast food)", "preference": "thích"}],
-        disliked_foods=[{"id": "d_1", "food": "sữa", "reason": "không thích vị"}],
-        favorite_foods=[{"id": "f_1", "food": "cơm", "preference": "rất thích"}, {"id": "f_2", "food": "thịt", "preference": "rất thích"}, {"id": "f_3", "food": "bánh ngọt", "preference": "thích"}],
+        taste_preferences={"spicy": 4, "sweet": 5, "salty": 3, "sour": 3, "bitter": 1},
+        cuisine_preferences=["vietnamese", "fusion"],
+        disliked_foods=["sữa"],
+        favorite_foods=["cơm", "thịt", "bánh ngọt"],
         disliked_foods_text="sữa",
         preferred_foods_text="cơm, thịt, bánh ngọt",
         allergies_text=None,
-        eating_speed="nhanh",
+        eating_speed="fast",
         chew_difficulty=False,
         energy_level="low",
         hydration="normal",
@@ -259,10 +260,7 @@ USERS = [
         allergies=[],
         dietary_restrictions=[],
         medications=[],
-        health_conditions=[
-            {"id": "cond_1", "name": "underweight", "severity": "nghiêm trọng", "status": "monitored"},
-            {"id": "cond_2", "name": "irregular_periods", "severity": "nhẹ", "status": "present"},
-        ],
+        health_conditions=[],
         sleep_duration_hours=4.5,
         sleep_quality=SleepQualityEnum.poor,
         sleep_schedule="02:00-07:30",
@@ -270,16 +268,16 @@ USERS = [
         meal_frequency=MealFrequencyEnum.two_meals,
         cooking_preference=CookingPreferenceEnum.eat_out,
         wake_up_time="07:30",
-        sleep_time="02:30",
+        sleep_time="01:30",
         work_schedule="10:00-23:00, 6 ngày/tuần",
-        taste_preferences={"spicy": "rất thích", "sweet": "rất thích", "salty": "trung bình", "sour": "thích", "bitter": "không thích"},
-        cuisine_preferences=[{"id": "c_1", "name": "Việt Nam", "preference": "rất thích"}, {"id": "c_2", "name": "Trung Quốc", "preference": "thích"}],
-        disliked_foods=[{"id": "d_1", "food": "thịt", "reason": "không thích mùi"}, {"id": "d_2", "food": "cá", "reason": "không thích mùi tanh"}],
-        favorite_foods=[{"id": "f_1", "food": "trái cây", "preference": "rất thích"}, {"id": "f_2", "food": "nước ép", "preference": "rất thích"}, {"id": "f_3", "food": "bánh ngọt", "preference": "thích"}],
+        taste_preferences={"spicy": 5, "sweet": 5, "salty": 3, "sour": 4, "bitter": 1},
+        cuisine_preferences=["vietnamese", "chinese"],
+        disliked_foods=["thịt", "cá"],
+        favorite_foods=["trái cây", "nước ép", "bánh ngọt"],
         disliked_foods_text="thịt, cá",
         preferred_foods_text="trái cây, nước ép, bánh ngọt",
         allergies_text=None,
-        eating_speed="nhanh",
+        eating_speed="fast",
         chew_difficulty=False,
         energy_level="low",
         hydration="low",
@@ -323,14 +321,14 @@ USERS = [
         wake_up_time="05:30",
         sleep_time="22:00",
         work_schedule="08:00-17:00, 5 ngày/tuần",
-        taste_preferences={"spicy": "trung bình", "sweet": "trung bình", "salty": "trung bình", "sour": "trung bình", "bitter": "trung bình"},
-        cuisine_preferences=[{"id": "c_1", "name": "Việt Nam", "preference": "rất thích"}, {"id": "c_2", "name": "Nhật Bản", "preference": "thích"}, {"id": "c_3", "name": "Ý", "preference": "thích"}],
+        taste_preferences={"spicy": 3, "sweet": 3, "salty": 3, "sour": 3, "bitter": 3},
+        cuisine_preferences=["vietnamese", "japanese", "western"],
         disliked_foods=[],
-        favorite_foods=[{"id": "f_1", "food": "ức gà", "preference": "rất thích"}, {"id": "f_2", "food": "cá hồi", "preference": "rất thích"}, {"id": "f_3", "food": "rau xanh", "preference": "rất thích"}, {"id": "f_4", "food": "gạo lứt", "preference": "thích"}, {"id": "f_5", "food": "trứng", "preference": "thích"}],
+        favorite_foods=["ức gà", "cá hồi", "rau xanh", "gạo lứt", "trứng"],
         disliked_foods_text=None,
         preferred_foods_text="ức gà, cá hồi, rau xanh, gạo lứt, trứng",
         allergies_text=None,
-        eating_speed="bình thường",
+        eating_speed="normal",
         chew_difficulty=False,
         energy_level="high",
         hydration="normal",
@@ -357,7 +355,7 @@ USERS = [
         usage_goal=UsageGoalEnum.balanced_lifestyle,
         target_weight=50.0,
         allergies=[],
-        dietary_restrictions=[{"id": "dr_1", "restriction": "vegetarian", "strictness": "strict", "reason": "tự nguyện"}],
+        dietary_restrictions=["vegetarian"],
         medications=[],
         health_conditions=[],
         sleep_duration_hours=7.0,
@@ -369,14 +367,14 @@ USERS = [
         wake_up_time="06:00",
         sleep_time="22:30",
         work_schedule="08:30-17:30, 5 ngày/tuần",
-        taste_preferences={"spicy": "trung bình", "sweet": "thích", "salty": "trung bình", "sour": "thích", "bitter": "không thích"},
-        cuisine_preferences=[{"id": "c_1", "name": "Việt Nam", "preference": "rất thích"}, {"id": "c_2", "name": "Ấn Độ", "preference": "thích"}],
-        disliked_foods=[{"id": "d_1", "food": "thịt", "reason": "ăn chay"}, {"id": "d_2", "food": "cá", "reason": "ăn chay"}, {"id": "d_3", "food": "hải sản", "reason": "ăn chay"}],
-        favorite_foods=[{"id": "f_1", "food": "đậu", "preference": "rất thích"}, {"id": "f_2", "food": "rau củ", "preference": "rất thích"}, {"id": "f_3", "food": "nấm", "preference": "thích"}, {"id": "f_4", "food": "tofu", "preference": "thích"}],
+        taste_preferences={"spicy": 3, "sweet": 4, "salty": 3, "sour": 4, "bitter": 1},
+        cuisine_preferences=["vietnamese", "indian"],
+        disliked_foods=["thịt", "cá", "hải sản"],
+        favorite_foods=["đậu", "rau củ", "nấm", "tofu"],
         disliked_foods_text="thịt, cá, hải sản",
         preferred_foods_text="đậu, rau củ, nấm, tofu",
         allergies_text=None,
-        eating_speed="bình thường",
+        eating_speed="normal",
         chew_difficulty=False,
         energy_level="normal",
         hydration="normal",
@@ -414,14 +412,14 @@ USERS = [
         wake_up_time="05:00",
         sleep_time="22:30",
         work_schedule="09:00-18:00, 5 ngày/tuần ( freelancer )",
-        taste_preferences={"spicy": "trung bình", "sweet": "không thích", "salty": "trung bình", "sour": "trung bình", "bitter": "không thích"},
-        cuisine_preferences=[{"id": "c_1", "name": "Việt Nam", "preference": "thích"}, {"id": "c_2", "name": "Healthy/clean eating", "preference": "rất thích"}],
-        disliked_foods=[{"id": "d_1", "food": "đồ ngọt", "reason": "kiêng để giữ dáng"}],
-        favorite_foods=[{"id": "f_1", "food": "ức gà", "preference": "rất thích"}, {"id": "f_2", "food": "gạo lứt", "preference": "rất thích"}, {"id": "f_3", "food": "trứng", "preference": "rất thích"}, {"id": "f_4", "food": "sữa", "preference": "rất thích"}, {"id": "f_5", "food": "thịt bò", "preference": "thích"}, {"id": "f_6", "food": "khoai lang", "preference": "thích"}],
+        taste_preferences={"spicy": 3, "sweet": 1, "salty": 3, "sour": 3, "bitter": 1},
+        cuisine_preferences=["vietnamese", "fusion"],
+        disliked_foods=["đồ ngọt"],
+        favorite_foods=["ức gà", "gạo lứt", "trứng", "sữa", "thịt bò", "khoai lang"],
         disliked_foods_text="đồ ngọt",
         preferred_foods_text="ức gà, gạo lứt, trứng, sữa, thịt bò, khoai lang",
         allergies_text=None,
-        eating_speed="bình thường",
+        eating_speed="normal",
         chew_difficulty=False,
         energy_level="high",
         hydration="high",
@@ -446,10 +444,10 @@ USERS = [
         goal_type=NutritionGoalType.giam_can,
         usage_goal=UsageGoalEnum.weight_loss,
         target_weight=68.0,
-        allergies=[{"id": "alg_1", "allergen": "gluten", "severity": "nhẹ", "category": "other"}],
+        allergies=[{"allergen": "wheat", "severity": "mild"}],
         dietary_restrictions=[],
         medications=[],
-        health_conditions=[{"id": "cond_1", "name": "sedentary_lifestyle", "severity": "nhẹ", "status": "present"}],
+        health_conditions=[{"condition": "obesity", "severity": "managed"}],
         sleep_duration_hours=6.0,
         sleep_quality=SleepQualityEnum.fair,
         sleep_schedule="01:00-07:00",
@@ -459,14 +457,14 @@ USERS = [
         wake_up_time="07:00",
         sleep_time="01:00",
         work_schedule="09:00-18:00, 5 ngày/tuần",
-        taste_preferences={"spicy": "thích", "sweet": "thích", "salty": "thích", "sour": "trung bình", "bitter": "không thích"},
-        cuisine_preferences=[{"id": "c_1", "name": "Việt Nam", "preference": "rất thích"}],
-        disliked_foods=[{"id": "d_1", "food": "cá", "reason": "không thích mùi"}],
-        favorite_foods=[{"id": "f_1", "food": "cơm trắng", "preference": "rất thích"}, {"id": "f_2", "food": "thịt heo", "preference": "rất thích"}, {"id": "f_3", "food": "bánh mì", "preference": "thích"}, {"id": "f_4", "food": "trà sữa", "preference": "thích"}],
+        taste_preferences={"spicy": 4, "sweet": 4, "salty": 4, "sour": 3, "bitter": 1},
+        cuisine_preferences=["vietnamese"],
+        disliked_foods=["cá"],
+        favorite_foods=["cơm trắng", "thịt heo", "bánh mì", "trà sữa"],
         disliked_foods_text="cá",
         preferred_foods_text="cơm trắng, thịt heo, bánh mì, trà sữa",
         allergies_text="dị ứng gluten nhẹ",
-        eating_speed="nhanh",
+        eating_speed="fast",
         chew_difficulty=False,
         energy_level="normal",
         hydration="low",
@@ -494,10 +492,10 @@ USERS = [
         target_weight=60.0,
         allergies=[],
         dietary_restrictions=[],
-        medications=[{"id": "med_1", "name": "metformin", "dosage": "500mg", "frequency": "2 lần/ngày"}],
+        medications=[{"name": "metformin", "dosage": "500mg", "frequency": "2 lần/ngày"}],
         health_conditions=[
-            {"id": "cond_1", "name": "type2_diabetes", "severity": "vừa", "status": "controlled"},
-            {"id": "cond_2", "name": "hypertension", "severity": "nhẹ", "status": "controlled"},
+            {"condition": "type2_diabetes", "severity": "managed"},
+            {"condition": "hypertension", "severity": "managed"},
         ],
         sleep_duration_hours=6.5,
         sleep_quality=SleepQualityEnum.fair,
@@ -508,14 +506,14 @@ USERS = [
         wake_up_time="06:00",
         sleep_time="23:00",
         work_schedule="08:00-16:00, 5 ngày/tuần (bán thời gian)",
-        taste_preferences={"spicy": "thích", "sweet": "không thích", "salty": "trung bình", "sour": "trung bình", "bitter": "không thích"},
-        cuisine_preferences=[{"id": "c_1", "name": "Việt Nam", "preference": "rất thích"}, {"id": "c_2", "name": "Keto-friendly", "preference": "rất thích"}],
-        disliked_foods=[{"id": "d_1", "food": "bánh kẹo", "reason": "kiêng keto"}, {"id": "d_2", "food": "cơm", "reason": "kiêng tinh bột"}],
-        favorite_foods=[{"id": "f_1", "food": "thịt bò", "preference": "rất thích"}, {"id": "f_2", "food": "trứng", "preference": "rất thích"}, {"id": "f_3", "food": "bơ", "preference": "rất thích"}, {"id": "f_4", "food": "dầu dừa", "preference": "thích"}],
+        taste_preferences={"spicy": 4, "sweet": 1, "salty": 3, "sour": 3, "bitter": 1},
+        cuisine_preferences=["vietnamese", "fusion"],
+        disliked_foods=["bánh kẹo", "cơm"],
+        favorite_foods=["thịt bò", "trứng", "bơ", "dầu dừa"],
         disliked_foods_text="bánh kẹo, cơm",
         preferred_foods_text="thịt bò, trứng, bơ, dầu dừa",
         allergies_text=None,
-        eating_speed="bình thường",
+        eating_speed="normal",
         chew_difficulty=False,
         energy_level="normal",
         hydration="normal",
@@ -543,7 +541,7 @@ USERS = [
         allergies=[],
         dietary_restrictions=[],
         medications=[],
-        health_conditions=[{"id": "cond_1", "name": "irregular_eating", "severity": "nhẹ", "status": "present"}],
+        health_conditions=[],
         sleep_duration_hours=5.0,
         sleep_quality=SleepQualityEnum.poor,
         sleep_schedule="03:00-08:30",
@@ -553,14 +551,14 @@ USERS = [
         wake_up_time="08:30",
         sleep_time="03:00",
         work_schedule="08:00-17:00 (ca học), tự do buổi tối",
-        taste_preferences={"spicy": "rất thích", "sweet": "rất thích", "salty": "thích", "sour": "trung bình", "bitter": "không thích"},
-        cuisine_preferences=[{"id": "c_1", "name": "Việt Nam", "preference": "thích"}, {"id": "c_2", "name": "Fast food", "preference": "rất thích"}, {"id": "c_3", "name": "Nhanh (quick meals)", "preference": "rất thích"}],
-        disliked_foods=[{"id": "d_1", "food": "rau", "reason": "không thích"}],
-        favorite_foods=[{"id": "f_1", "food": "pizza", "preference": "rất thích"}, {"id": "f_2", "food": "burger", "preference": "rất thích"}, {"id": "f_3", "food": "trà sữa", "preference": "rất thích"}, {"id": "f_4", "food": "bánh ngọt", "preference": "thích"}],
+        taste_preferences={"spicy": 5, "sweet": 5, "salty": 4, "sour": 3, "bitter": 1},
+        cuisine_preferences=["vietnamese", "fusion"],
+        disliked_foods=["rau"],
+        favorite_foods=["pizza", "burger", "trà sữa", "bánh ngọt"],
         disliked_foods_text="rau",
         preferred_foods_text="pizza, burger, trà sữa, bánh ngọt",
         allergies_text=None,
-        eating_speed="rất nhanh",
+        eating_speed="fast",
         chew_difficulty=False,
         energy_level="normal",
         hydration="low",
@@ -695,12 +693,12 @@ async def seed_demo_data():
         await db.execute(text("DELETE FROM user_profiles"))
         await db.execute(text("DELETE FROM users"))
         await db.commit()
-        print("Đã xóa dữ liệu cũ.")
+        print("[OK] Old data wiped.")
 
         all_users = []
 
         for idx, udata in enumerate(USERS, 1):
-            print(f"\n[{idx}/10] Tạo: {udata['full_name']}")
+            print(f"\n[{idx}/10] Create: {udata['full_name']}")
 
             # ── User
             now_ts = datetime.now(timezone.utc)
@@ -1056,7 +1054,7 @@ async def seed_demo_data():
                     {"food": a["allergen"], "reason": "dị ứng", "confidence": "high"}
                     for a in (udata.get("allergies") or [])
                 ],
-                "preferred_foods": [f["food"] for f in (udata.get("favorite_foods") or [])],
+                "preferred_foods": list(udata.get("favorite_foods") or []),
                 "meal_pattern": str(udata.get("meal_frequency", "three_meals")).replace("MealFrequencyEnum.", ""),
             }
 
@@ -1086,14 +1084,14 @@ async def seed_demo_data():
             if udata.get("health_conditions"):
                 for c in udata["health_conditions"]:
                     key_facts.append({
-                        "fact": f"Tình trạng sức khỏe: {c['name']} (mức độ {c.get('severity', 'không rõ')})",
+                        "fact": f"Tình trạng sức khỏe: {c['condition']} (mức độ {c.get('severity', 'không rõ')})",
                         "confidence": "high",
                         "first_seen": date.today().isoformat(),
                         "category": "health_condition",
                     })
             if udata.get("favorite_foods"):
                 key_facts.append({
-                    "fact": f"Yêu thích: {', '.join(f['food'] for f in udata['favorite_foods'][:3])}",
+                    "fact": f"Yêu thích: {', '.join(udata['favorite_foods'][:3])}",
                     "confidence": "high",
                     "first_seen": date.today().isoformat(),
                     "category": "food_preference",
@@ -1101,7 +1099,7 @@ async def seed_demo_data():
             if udata.get("disliked_foods"):
                 for d in udata["disliked_foods"]:
                     key_facts.append({
-                        "fact": f"Không thích ăn: {d['food']}",
+                        "fact": f"Không thích ăn: {d}",
                         "confidence": "high",
                         "first_seen": date.today().isoformat(),
                         "category": "food_preference",
@@ -1177,15 +1175,15 @@ async def seed_demo_data():
             all_users.append((user.email, "SmartMeal123"))
 
         await db.commit()
-        print("\nHoàn tất! Đã tạo 10 users.")
-        print("\nTài khoản đăng nhập:")
+        print("\n[OK] Done. Created 10 users.")
+        print("\nLogin accounts:")
         for email, pw in all_users:
             print(f"  {email} / {pw}")
 
-        print("\nBMI và phân loại:")
+        print("\nBMI categories:")
         for udata in USERS:
             bmi = udata["weight_kg"] / ((udata["height_cm"] / 100) ** 2)
-            cat = "Béo phì" if bmi >= 30 else "Thừa cân" if bmi >= 25 else "Thiếu cân" if bmi < 18.5 else "Bình thường"
+            cat = "obese" if bmi >= 30 else "overweight" if bmi >= 25 else "underweight" if bmi < 18.5 else "normal"
             print(f"  {udata['full_name']}: BMI={bmi:.1f} ({cat}), lifestyle={udata['lifestyle_score']}/10")
 
 
@@ -1209,6 +1207,10 @@ async def _create_meal(
         nutrition_goal_id=goal_id,
         meal_type=meal_type,
         meal_time=meal_dt,
+        # Seeded demo meals represent already-confirmed history; mark them
+        # APPROVED so the dashboard doesn't pile up "ghost" PENDING rows
+        # that the user never explicitly confirmed.
+        status=MealLogStatus.APPROVED,
         total_calories=sum(f["cal"] for f in foods),
         total_protein_g=sum(f["protein"] for f in foods),
         total_carb_g=sum(f["carb"] for f in foods),

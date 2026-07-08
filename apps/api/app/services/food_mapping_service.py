@@ -187,6 +187,10 @@ def score_candidates(
     """
     Score each candidate against the search name using multiple signals.
     Returns sorted list of candidates with scores.
+
+    Tokens are derived from food_name, food_name_vi, AND food_name_en
+    (max Jaccard across all three) so Vietnamese queries can match against
+    foods whose canonical English name has no overlap with the query tokens.
     """
     search_normalized = normalize_vietnamese(search_name)
     search_tokens = tokenize(search_name)
@@ -196,7 +200,6 @@ def score_candidates(
         food_norm = normalize_vietnamese(food.food_name or "")
         food_vi_norm = normalize_vietnamese(food.food_name_vi or "")
         food_en_norm = normalize_vietnamese(food.food_name_en or "")
-        food_tokens = tokenize(food.food_name or "")
 
         # Primary: Levenshtein ratio on normalized primary name
         lev_primary = _levenshtein_ratio(search_normalized, food_norm)
@@ -204,16 +207,36 @@ def score_candidates(
         lev_en = _levenshtein_ratio(search_normalized, food_en_norm)
         lev_best = max(lev_primary, lev_vi, lev_en)
 
-        # Secondary: Jaccard on tokenized names
-        jaccard = _jaccard_similarity(search_tokens, food_tokens)
+        # Secondary: max Jaccard across all token sources so "trứng gà" can
+        # match "Trứng luộc" via shared vi tokens even when food_name is "Boiled egg".
+        jaccard = max(
+            _jaccard_similarity(search_tokens, tokenize(food.food_name or "")),
+            _jaccard_similarity(search_tokens, tokenize(food.food_name_vi or "")),
+            _jaccard_similarity(search_tokens, tokenize(food.food_name_en or "")),
+        )
 
-        # Combined score: weighted average
-        # Levenshtein is more sensitive to typos, Jaccard handles multi-word
-        combined = (lev_best * 0.6) + (jaccard * 0.4)
+        # Combined score: weighted average (Levenshtein 0.5, Jaccard 0.5)
+        # Equal weights balance typo correction (Lev) with semantic overlap (Jaccard).
+        combined = (lev_best * 0.5) + (jaccard * 0.5)
 
         # Boost verified foods slightly
         if food.is_verified:
             combined = min(1.0, combined * 1.05)
+
+        # Boost when the query's leading token is a substring of any food name.
+        # Helps "trứng gà" → "Trứng luộc" (shared "trứng") cross the 0.55 threshold
+        # without matching unrelated items like "thịt heo" → "Thịt bò nạc".
+        search_token_list = list(search_tokens)
+        if search_token_list:
+            first_token = search_token_list[0]
+            if (
+                len(first_token) >= 3
+                and (
+                    first_token in food_norm
+                    or first_token in food_vi_norm
+                )
+            ):
+                combined = min(1.0, combined + 0.1)
 
         # Boost if exact normalized substring match
         if search_normalized in food_norm or search_normalized in food_vi_norm:

@@ -114,14 +114,14 @@ class Settings(BaseSettings):
     # Supabase uses PgBouncer in transaction mode as a connection pooler.
     # Two-tier pooling: app pool (SQLAlchemy) sits behind PgBouncer pool.
     #
-    # Pool settings per worker: pool_size=4, max_overflow=12
-    # The extractor_queue_worker_loop consumes 1 connection during extraction (~3-10s).
-    # max_overflow=12 provides headroom so the queue worker + burst HTTP requests
-    # never exhaust the pool.
+    # Pool settings per worker: pool_size=8, max_overflow=12
+    # Sized so a single Phase-2 request running 3 agents concurrently + the
+    # extractor queue worker + buffer can all share the pool without serializing
+    # on connection checkout (which previously triggered pool-full warnings).
     #
-    # Per-worker ceiling: pool_size + max_overflow = 4 + 12 = 16 connections
-    # 4 workers × 16 = 64 max — safely below Supabase free tier (60) but tight;
-    # increase workers or reduce overflow if deploying to a tighter limit.
+    # Per-worker ceiling: pool_size + max_overflow = 8 + 12 = 20 connections
+    # 4 workers × 20 = 80 max — over Supabase free tier (60) by 20; reduce to
+    # 3 workers (60 max) if Supabase rejects idle connections.
     #
     # Key settings for transaction-mode PgBouncer:
     # - pool_pre_ping: disabled (PgBouncer handles connection health)
@@ -129,7 +129,7 @@ class Settings(BaseSettings):
     # - connect_args.statement_cache_size = 0 (asyncpg, see session.py)
     #   disables prepared statements — required because PgBouncer cannot share
     #   prepared statements across connections (each statement is parsed per-connection).
-    DATABASE_POOL_SIZE: int = 4
+    DATABASE_POOL_SIZE: int = 8
     DATABASE_MAX_OVERFLOW: int = 12
     DATABASE_POOL_TIMEOUT: int = 30
     DATABASE_POOL_RECYCLE: int = 1800   # 30 minutes — PgBouncer max idle is 60 min

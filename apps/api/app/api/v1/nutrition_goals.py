@@ -104,7 +104,7 @@ async def get_my_active_nutrition_goal(
 
 @router.put("/{goal_id}", response_model=NutritionGoalResponse)
 async def update_nutrition_goal(
-    goal_id: int,
+    goal_id: UUID,
     goal_data: NutritionGoalUpdate,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),

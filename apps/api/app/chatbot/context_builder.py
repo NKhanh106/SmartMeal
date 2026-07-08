@@ -247,7 +247,8 @@ async def build_chatbot_context(
                 "total_protein_g": meal.total_protein_g,
                 "total_carb_g": meal.total_carb_g,
                 "total_fat_g": meal.total_fat_g,
-                "note": meal.note,
+                # Cap meal.note — user free-text, can be arbitrarily long.
+                "note": sanitize_for_prompt(meal.note, max_length=100) if meal.note else None,
             }
             for meal in recent_meals
         ],
@@ -257,7 +258,7 @@ async def build_chatbot_context(
                 "role": msg.role,
                 # Sanitize every historical message content before it enters the prompt.
                 # Blocks cumulative multi-turn injection and stored-persistent injection via history.
-                "content": sanitize_for_prompt(msg.content, max_length=500),
+                "content": sanitize_for_prompt(msg.content, max_length=policy.chat_history_message_cap),
                 "created_at": msg.created_at,
             }
             for msg in recent_chat_messages
@@ -268,10 +269,12 @@ async def build_chatbot_context(
         # Sanitize ALL free-text fields before they reach the AI prompt.
         # Blocks stored-persistent injection via profile fields.
         # Guard: skip sanitization for non-string values (Enum, int, float, None).
-        def _safe(text, limit=500):
+        def _safe(text, limit=None):
             if isinstance(text, str):
-                return sanitize_for_prompt(text, max_length=limit)
+                return sanitize_for_prompt(text, max_length=limit if limit is not None else policy.profile_free_text_cap)
             return text
+
+        free_text_cap = policy.profile_free_text_cap
 
         profile_dict = {
             "gender": profile.gender.value if hasattr(profile.gender, "value") else str(profile.gender),
@@ -283,35 +286,35 @@ async def build_chatbot_context(
             "diet_type": profile.diet_type.value if hasattr(profile.diet_type, "value") else str(profile.diet_type),
             # JSONB / list fields — sanitize nested free-text values
             "allergies": [
-                {**a, "allergen": _safe(a.get("allergen", ""), 200)}
-                if isinstance(a, dict) else _safe(str(a), 200)
+                {**a, "allergen": _safe(a.get("allergen", ""))}
+                if isinstance(a, dict) else _safe(str(a))
                 for a in (profile.allergies or [])
             ],
-            "allergies_text": _safe(profile.allergies_text, 500),
+            "allergies_text": _safe(profile.allergies_text),
             "disliked_foods": [
-                {**d, "name": _safe(d.get("name", ""), 200)}
-                if isinstance(d, dict) else _safe(str(d), 200)
+                {**d, "name": _safe(d.get("name", ""))}
+                if isinstance(d, dict) else _safe(str(d))
                 for d in (profile.disliked_foods or [])
             ],
-            "disliked_foods_text": _safe(profile.disliked_foods_text, 500),
-            "preferred_foods": _safe(profile.preferred_foods_text, 500) if profile.preferred_foods_text else "",
-            "preferred_foods_text": _safe(profile.preferred_foods_text, 500),
+            "disliked_foods_text": _safe(profile.disliked_foods_text),
+            "preferred_foods": _safe(profile.preferred_foods_text) if profile.preferred_foods_text else "",
+            "preferred_foods_text": _safe(profile.preferred_foods_text),
             # Long free-text notes — the primary stored-injection vector
-            "health_note": _safe(profile.health_note, 500),
+            "health_note": _safe(profile.health_note),
             # Extended fields
             "usage_goal": profile.usage_goal.value if profile.usage_goal and hasattr(profile.usage_goal, "value") else profile.usage_goal,
-            "usage_goal_note": _safe(profile.usage_goal_note, 500),
+            "usage_goal_note": _safe(profile.usage_goal_note),
             # Nested JSONB — sanitize condition notes
             "health_conditions": [
-                {**c, "note": _safe(c.get("note", ""), 200)}
+                {**c, "note": _safe(c.get("note", ""))}
                 if isinstance(c, dict) else c
                 for c in (profile.health_conditions or [])
             ],
             "allergies_jsonb": profile.allergies,
             # Medications — sanitize drug names
             "medications": [
-                {**m, "name": _safe(m.get("name", ""), 200)}
-                if isinstance(m, dict) else _safe(str(m), 200)
+                {**m, "name": _safe(m.get("name", ""))}
+                if isinstance(m, dict) else _safe(str(m))
                 for m in (profile.medications or [])
             ],
             "dietary_restrictions": profile.dietary_restrictions,
@@ -355,10 +358,11 @@ async def build_chatbot_context(
             "protein_target_g": latest_recommendation.protein_target_g,
             "carb_target_g": latest_recommendation.carb_target_g,
             "fat_target_g": latest_recommendation.fat_target_g,
-            "meal_suggestion": latest_recommendation.meal_suggestion,
-            "workout_suggestion": latest_recommendation.workout_suggestion,
-            "lifestyle_suggestion": latest_recommendation.lifestyle_suggestion,
-            "ai_summary": latest_recommendation.ai_summary,
+            # AI-generated free-text fields — cap to bound prompt size.
+            "meal_suggestion": sanitize_for_prompt(latest_recommendation.meal_suggestion, max_length=300) if latest_recommendation.meal_suggestion else None,
+            "workout_suggestion": sanitize_for_prompt(latest_recommendation.workout_suggestion, max_length=300) if latest_recommendation.workout_suggestion else None,
+            "lifestyle_suggestion": sanitize_for_prompt(latest_recommendation.lifestyle_suggestion, max_length=300) if latest_recommendation.lifestyle_suggestion else None,
+            "ai_summary": sanitize_for_prompt(latest_recommendation.ai_summary, max_length=400) if latest_recommendation.ai_summary else None,
         }
 
     # ── Conversation Insights ───────────────────────────────────────────────────

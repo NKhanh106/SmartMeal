@@ -265,13 +265,21 @@ class BaseAgent(ABC):
                 last_error = exc
                 error_str = str(exc).lower()
                 is_rate_limit = "rate limit" in error_str or "429" in error_str
+                is_too_large = "413" in error_str or "request too large" in error_str
 
-                if is_rate_limit and attempt < len(keys) - 1:
+                if is_too_large:
+                    # TPM exceeded on a single key — wait briefly and retry the
+                    # same call. Rotating the key won't help (limit is per-org),
+                    # but a short pause often does because the TPM window is
+                    # rolling per minute.
+                    wait_s = 2.0 + attempt * 2.0
                     logger.warning(
-                        f"[Agent:{self.name}] Rate limit on key {current_key_idx % len(keys)}, "
-                        f"trying next key (attempt {attempt + 1}/{len(keys)})"
+                        f"[Agent:{self.name}] 413 (TPM exceeded) — sleeping {wait_s:.1f}s "
+                        f"before retry (attempt {attempt + 1}/{len(keys)})"
                     )
+                    await asyncio.sleep(wait_s)
                     continue
+
                 if is_rate_limit and attempt < len(keys) - 1:
                     logger.warning(
                         f"[Agent:{self.name}] Rate limit on key {current_key_idx % len(keys)}, "
@@ -291,6 +299,18 @@ class BaseAgent(ABC):
         usage = stream.usage
         choice = stream.choices[0]
         text = choice.message.content or ""
+        finish_reason = getattr(choice, "finish_reason", None)
+
+        prompt_chars = sum(len(m.get("content") or "") for m in messages)
+        if not text:
+            logger.warning(
+                "[%s] Groq returned empty content. finish_reason=%s, "
+                "usage=%s, prompt_chars=%d, model=%s, latency_ms=%d",
+                self.name, finish_reason,
+                {k: getattr(usage, k, None) for k in ("prompt_tokens", "completion_tokens", "total_tokens")}
+                if usage else None,
+                prompt_chars, model_name, latency_ms,
+            )
 
         self._last_usage = {
             "input_tokens": usage.prompt_tokens if usage else None,

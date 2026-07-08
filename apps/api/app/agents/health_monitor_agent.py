@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.base import AgentContext, AgentResult, BaseAgent
 from app.agents.output_guardrails import append_medical_disclaimer
 from app.agents.prompt_builder import build_health_monitor_context
-from app.schemas.chat_card import ChatCard
+from app.schemas.chat_card import ChatCard, CardType
 
 logger = logging.getLogger(__name__)
 
@@ -231,14 +231,29 @@ def _check_mental_health_crisis(message: str) -> tuple[bool, bool]:
     is_crisis  = True  if any CRISIS keyword is found  → escalate immediately
     is_concern = True  if any CONCERN keyword is found  → acknowledge, not block
     Crisis takes priority: if crisis=True, concern is always False.
+
+    Both checks apply the same negation + third-person gates used by the
+    URGENT_KEYWORDS path — without them, a user merely quoting or
+    re-sending text containing a crisis keyword (e.g., their own prior
+    health-report card, an article excerpt) would still trigger escalation.
     """
     msg_lower = message.lower()
 
-    is_crisis = any(kw in msg_lower for kw in MENTAL_HEALTH_CRISIS_KEYWORDS)
+    is_crisis = any(
+        kw in msg_lower
+        and not _is_negated(kw, message)
+        and not _is_third_person_report(message, kw)
+        for kw in MENTAL_HEALTH_CRISIS_KEYWORDS
+    )
     if is_crisis:
         return True, False
 
-    is_concern = any(kw in msg_lower for kw in MENTAL_HEALTH_CONCERN_KEYWORDS)
+    is_concern = any(
+        kw in msg_lower
+        and not _is_negated(kw, message)
+        and not _is_third_person_report(message, kw)
+        for kw in MENTAL_HEALTH_CONCERN_KEYWORDS
+    )
     return False, is_concern
 
 
@@ -272,7 +287,7 @@ class HealthMonitorAgent(BaseAgent):
                 )
                 crisis_card = ChatCard(
                     card_id=f"mh_crisis_{run.id}",
-                    card_type="CONFIRM",
+                    card_type=CardType.CONFIRM,
                     title="Bạn không cô đơn trong điều này",
                     subtitle=(
                         "Tôi thấy bạn đang trải qua điều rất khó khăn. "
@@ -363,7 +378,7 @@ class HealthMonitorAgent(BaseAgent):
                                           if context.depth_config else "unknown"),
                     }
                 )
-                alert_text = f"⚠️ URGENT: User reports serious symptoms: {urgent_keywords_found}. Recommend immediate medical attention."
+                alert_text = f"URGENT: User reports serious symptoms: {urgent_keywords_found}. Recommend immediate medical attention."
                 result = AgentResult(
                     agent_name=self.name,
                     success=True,
@@ -371,7 +386,7 @@ class HealthMonitorAgent(BaseAgent):
                     content={
                         "current_status": {"overall": "urgent"},
                         "alerts": [
-                            f"⚠️ Triệu chứng nghiêm trọng phát hiện: {', '.join(urgent_keywords_found)}. "
+                            f"Trieu chung nghiem trong phat hien: {', '.join(urgent_keywords_found)}. "
                             f"Vui lòng gặp bác sĩ ngay lập tức."
                         ],
                         "active_issues": [],

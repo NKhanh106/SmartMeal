@@ -9,6 +9,7 @@ from uuid import UUID
 import sqlalchemy as sa
 from fastapi import BackgroundTasks, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
+from groq import APIStatusError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -390,12 +391,6 @@ async def send_chat_message(
         else settings.GROQ_TEXT_MODEL
     )
 
-    # NOTE: Regex-based meal command detection has been removed from this path.
-    # ExtractorAgent handles all meal extraction. Explicit meal commands in user messages
-    # will be caught by ExtractorAgent's extraction schema. No direct DB writes here.
-
-    # ── Web research check ─────────────────────────────────────────────────
-    # Run in parallel with AI response when triggered (non-blocking)
     web_research_triggered = (
         should_trigger_web_research(user_content)
         or needs_low_confidence_research(user_content)
@@ -487,21 +482,7 @@ async def send_chat_message(
         )
         session.last_activity_at = datetime.now(timezone.utc)
 
-        # ── Legacy extraction pipelines removed ────────────────────────────────────
-        # All extraction now flows through ExtractorAgent as the single authoritative
-        # pipeline. The following duplicate pipelines were permanently removed:
-        #   - _bg_passive_meal_extraction (AI-based)
-        #   - _bg_extract_insights (duplicate key_facts extraction)
-        #   - detect_meal_command() / process_meal_command() direct-write paths
-        #
-        # ExtractorAgent runs via _bg_extractor_agent below. It writes UserMemory
-        # via MemoryWriteEngine and generates UpdateProposals that require user
-        # confirmation before any MealLog write to the database.
-        #
-        # Dispatch background tasks before commit — they receive primitive values
         if background_tasks is not None:
-            # ExtractorAgent: runs after EVERY message to extract structured facts → UserMemory
-            # This is the ONLY extraction system. All other background tasks removed.
             background_tasks.add_task(
                 _bg_extractor_agent,
                 user_id=user_id,
@@ -510,7 +491,6 @@ async def send_chat_message(
                 ai_response=answer,
             )
 
-        # Commit session update and user/assistant messages first
         await db.commit()
         await db.refresh(user_message)
         await db.refresh(assistant_message)
@@ -602,54 +582,60 @@ async def _bg_extractor_agent(
 
 # ─── Card streaming functions ────────────────────────────────────────────────────
 
-# Tool definition the AI can call to emit a card
+# Tool definition the AI can call to emit a card.
+# Groq/OpenAI tool-calling API requires each tool entry to be wrapped in
+# {"type": "function", "function": {...}}; the inner function object holds
+# name/description/parameters (NOT input_schema — Groq uses "parameters").
 ASK_USER_TOOL = {
-    "name": "ask_user",
-    "description": (
-        "Use this tool when you need specific information from the user to give "
-        "accurate advice. Do NOT use for general conversation. Use when: "
-        "(1) you need a number (weight, age, portion size), "
-        "(2) you need to choose between clearly distinct options, "
-        "(3) you need to confirm before taking an action like logging a meal. "
-        "Do NOT use more than once per response."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "card_type": {
-                "type": "string",
-                "enum": ["single_select", "multi_select", "rank", "number_input", "confirm"],
-                "description": "Type of input to collect",
-            },
-            "title": {
-                "type": "string",
-                "description": "The question to ask the user. Max 60 characters. Vietnamese.",
-            },
-            "subtitle": {
-                "type": "string",
-                "description": "Optional hint or context. Max 100 characters.",
-            },
-            "options": {
-                "type": "array",
-                "description": "Required for single_select, multi_select, rank",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "id":    {"type": "string"},
-                        "label": {"type": "string"},
-                        "icon":  {"type": "string", "description": "Single emoji"},
-                    },
-                    "required": ["id", "label"],
+    "type": "function",
+    "function": {
+        "name": "ask_user",
+        "description": (
+            "Use this tool when you need specific information from the user to give "
+            "accurate advice. Do NOT use for general conversation. Use when: "
+            "(1) you need a number (weight, age, portion size), "
+            "(2) you need to choose between clearly distinct options, "
+            "(3) you need to confirm before taking an action like logging a meal. "
+            "Do NOT use more than once per response."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "card_type": {
+                    "type": "string",
+                    "enum": ["single_select", "multi_select", "rank", "number_input", "confirm"],
+                    "description": "Type of input to collect",
                 },
+                "title": {
+                    "type": "string",
+                    "description": "The question to ask the user. Max 60 characters. Vietnamese.",
+                },
+                "subtitle": {
+                    "type": "string",
+                    "description": "Optional hint or context. Max 100 characters.",
+                },
+                "options": {
+                    "type": "array",
+                    "description": "Required for single_select, multi_select, rank",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id":    {"type": "string"},
+                            "label": {"type": "string"},
+                            "icon":  {"type": "string", "description": "Single emoji"},
+                        },
+                        "required": ["id", "label"],
+                    },
+                },
+                "unit":        {"type": "string", "description": "For number_input only"},
+                "min_value":   {"type": "number", "description": "For number_input only"},
+                "max_value":   {"type": "number", "description": "For number_input only"},
+                "placeholder": {"type": "string", "description": "For number_input only"},
+                "min_selections": {"type": "integer", "description": "For multi_select"},
+                "max_selections": {"type": "integer", "description": "For multi_select"},
             },
-            "unit":        {"type": "string", "description": "For number_input only"},
-            "min_value":   {"type": "number", "description": "For number_input only"},
-            "max_value":   {"type": "number", "description": "For number_input only"},
-            "placeholder": {"type": "string", "description": "For number_input only"},
-            "min_selections": {"type": "integer", "description": "For multi_select"},
-            "max_selections": {"type": "integer", "description": "For multi_select"},
+            "required": ["card_type", "title"],
         },
-        "required": ["card_type", "title"],
     },
 }
 
@@ -712,6 +698,14 @@ async def process_streaming_message(
 
     # 2. Sanitize for AI prompts (prevents prompt injection)
     safe_content = sanitize_for_prompt(user_content)
+
+    # NOTE: Mental-health crisis detection intentionally happens INSIDE the
+    # multi_agent_orchestrator (HealthMonitorAgent) — not here at the entry
+    # point. The orchestrator's detection uses full context (negation,
+    # third-person references, prior sentiment) and decides whether to
+    # emit a crisis card. A naive keyword check at this entry point would
+    # false-positive when the user quotes their own health report text
+    # containing crisis keywords (e.g., echoing back a card payload).
 
     # 3. Update session title on first real message
     if session.title == "Cuoc tro chuyen moi":
@@ -877,6 +871,48 @@ async def process_card_response_and_stream(
         logger_stream.warning("Failed to deserialize card data for message %s", card_msg.id)
         original_card = None
 
+    # ── Mental-health crisis short-circuit ──────────────────────────────────────
+    # When the user dismisses a crisis card, skip the full LLM context build
+    # (which can blow Groq's 6000 TPM limit) and stream a safe, empathetic
+    # template response instead.
+    # We check THREE signals because legacy crisis cards often fail to
+    # deserialize (DB-stored JSON missing required fields), so we cannot rely
+    # on original_card alone:
+    #   1. card_response.card_id from the incoming request (always present)
+    #   2. raw card_data dict from DB (survives even when model_validate fails)
+    #   3. validated original_card object (when deserialization succeeds)
+    is_crisis_card = (
+        str(getattr(card_response, "card_id", "") or "").startswith("mh_crisis_")
+        or str(card_data.get("card_id", "")).startswith("mh_crisis_")
+        or card_data.get("trigger_reason") == "mental_health_crisis"
+        or (original_card is not None and original_card.trigger_reason == "mental_health_crisis")
+    )
+    if is_crisis_card:
+        logger_stream.info(
+            "Crisis card dismissed for session %s — using short safe response (skipping LLM)",
+            session.id,
+        )
+        # 2. Save card_response to the card message
+        card_msg.card_response = card_response.model_dump(mode="json")
+        await db.commit()
+
+        crisis_response_text = (
+            "Mình nghe thấy bạn và rất lo lắng cho bạn lúc này. "
+            "Những suy nghĩ này không phải là điều bạn nên chịu một mình.\n\n"
+            "Bạn có thể gọi ngay đường dây hỗ trợ tâm lý 24/7 tại Việt Nam:\n"
+            "  • Tổng đài 1800-1567 (Tư vấn tâm lý miễn phí)\n"
+            "  • Trung tâm cấp cứu 115 hoặc đến cơ sở y tế gần nhất\n\n"
+            "Nếu bạn muốn tiếp tục trò chuyện, mình sẵn sàng lắng nghe — "
+            "nhưng mình không phải chuyên gia tâm lý, và những gì bạn đang cảm thấy "
+            "xứng đáng được hỗ trợ bởi người có chuyên côn."
+        )
+        chunk_size = 20  # chars per SSE chunk for smooth streaming
+        for i in range(0, len(crisis_response_text), chunk_size):
+            yield f"data: {json.dumps({'delta': crisis_response_text[i:i+chunk_size]}, ensure_ascii=False)}\n\n"
+            await asyncio.sleep(0.02)
+        yield f"data: {json.dumps({'done': True})}\n\n"
+        return
+
     # 2. Save card_response to the card message
     card_msg.card_response = card_response.model_dump(mode="json")
     await db.flush()
@@ -961,6 +997,15 @@ async def process_card_response_and_stream(
                     {"role": "system", "content": CHATBOT_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ]
+                # Temporary diagnostic — log breakdown of user_prompt to identify
+                # which section(s) dominate. Remove after 413 issue is resolved.
+                logger_stream.info(
+                    "Card prompt size: sys=%d user=%d est_tokens_4ch=%d",
+                    len(CHATBOT_SYSTEM_PROMPT), len(user_prompt),
+                    (len(CHATBOT_SYSTEM_PROMPT) + len(user_prompt)) // 4,
+                )
+                logger_stream.info("Card prompt PREVIEW[0:1500]: %s", user_prompt[:1500])
+                logger_stream.info("Card prompt PREVIEW[-500:]: %s", user_prompt[-500:])
 
                 stream = await client.chat.completions.create(
                     model=settings.GROQ_TEXT_MODEL,
@@ -1000,6 +1045,22 @@ async def process_card_response_and_stream(
         except asyncio.TimeoutError:
             yield f"data: {json.dumps({'error': 'timeout', 'detail': 'AI stream timed out after 60s'})}\n\n"
             logger_stream.error("Card response stream timeout for session %s", session.id)
+            return
+
+        except APIStatusError as exc:
+            # Groq rate-limit / TPM errors (HTTP 413/429). Without this catch the
+            # error propagates to ASGI middleware → 500 to the client. Emit a
+            # graceful SSE error so the UI can show a fallback message.
+            status_code = getattr(exc, "status_code", None)
+            error_msg = (
+                "Xin lỗi, hệ thống đang bị quá tải (đã đạt giới hạn token mỗi phút). "
+                "Vui lòng thử lại sau ít giây."
+            )
+            logger_stream.error(
+                "Card response stream Groq API error for session %s: status=%s body=%s",
+                session.id, status_code, getattr(exc, "response", None) and exc.response.text,
+            )
+            yield f"data: {json.dumps({'error': 'rate_limit', 'status': status_code, 'detail': error_msg})}\n\n"
             return
 
     finally:

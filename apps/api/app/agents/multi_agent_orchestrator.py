@@ -72,6 +72,19 @@ from app.agents.memory_service import (
     get_memory_context_for_agent,
     get_or_create_memory,
 )
+
+
+def _keyword_matches_event(keyword: str, descriptions_blob: str) -> bool:
+    """
+    True if `keyword` is already represented in any active health-event
+    description. Used by the safety precheck to suppress repeat popups
+    when the user is referencing a symptom they have already reported.
+
+    Simple substring match: descriptions are short free-text Vietnamese,
+    and keywords are single words or short phrases, so substring works
+    for both cases ("tiêu chảy" in "Bị tiêu chảy sau bữa trưa").
+    """
+    return keyword.lower() in descriptions_blob
 from app.agents.nutrition_advisor_agent import NutritionAdvisorAgent
 from app.agents.web_researcher_agent import WebResearcherAgent
 from app.chatbot.context_builder import build_health_context, get_dietary_rules
@@ -128,7 +141,7 @@ def _make_health_fallback(reason: str) -> AgentResult:
         priority=4,
         confidence=0.0,
         text_for_orchestrator=(
-            f"⚠️ Health assessment could not complete ({reason}). "
+            f"[HealthMonitor] Health assessment could not complete ({reason}). "
             "Response generated without real-time health context. "
             "Apply conservative defaults for all recommendations."
         ),
@@ -234,7 +247,7 @@ class MultiAgentOrchestrator:
         # ── QUICK MODE: Skip all specialist agents ────────────────────────────
         if depth_config.mode == ResponseDepth.QUICK:
             # Minimal rule-based safety gate — must run even in QUICK mode
-            safety_result = await self._quick_safety_precheck(sanitized_message)
+            safety_result = await self._quick_safety_precheck(sanitized_message, memory)
 
             if safety_result:
                 card = safety_result.suggested_card
@@ -331,8 +344,30 @@ class MultiAgentOrchestrator:
 
             # Set context for Phase 2 — use the real result when available,
             # fall back to safe defaults when health did not complete.
-            if "health" not in context.agent_results:
-                context.agent_results["health"] = health_result
+            # Always write to the local agent_results dict (NOT context.agent_results,
+            # which may not exist if line 328 was skipped due to an exception).
+            if "health" not in agent_results:
+                agent_results["health"] = health_result
+            context.agent_results = agent_results
+
+        # Mental-health crisis short-circuit: HealthMonitor (Phase 1) already
+        # surfaces the crisis card. Skipping Phase 2 specialists prevents
+        # sending a mental-health crisis message back to the LLM, which
+        # triggers a content-policy refusal and a downstream JSON parse error
+        # (NutritionAdvisor / FitnessCoach receive a message they can't
+        # safely turn into structured JSON).
+        if (
+            "health" in agent_results
+            and agent_results["health"].success
+            and agent_results["health"].content
+            and agent_results["health"].content.get("current_status", {}).get("overall") == "urgent"
+        ):
+            logger.info(
+                "[Orchestrator] Crisis detected by HealthMonitor — skipping Phase 2 specialists"
+            )
+            should_run_nutrition = False
+            should_run_fitness = False
+            should_run_research = False
 
         # Release the initial session — all subsequent DB writes use session_factory
         await db.close()
@@ -353,30 +388,57 @@ class MultiAgentOrchestrator:
             agent_key: str,
             ctx: AgentContext,
         ) -> tuple[str, AgentResult | None]:
-            """Run an agent with its own isolated session + transaction."""
-            async with session_factory() as agent_db:
+            """Run an agent with its own isolated session + transaction.
+            
+            Includes retry logic for PgBouncer transaction-mode race conditions.
+            """
+            for attempt in range(3):
                 try:
-                    async with agent_db.begin():
-                        result = await agent.run(ctx, agent_db)
-                    return agent_key, result
-                except asyncio.CancelledError:
-                    await agent_db.rollback()
-                    raise
-                except Exception as e:
-                    await agent_db.rollback()
-                    logger.error("[Orchestrator] Agent '%s' raised in isolated session: %s", agent_key, e)
+                    async with session_factory() as agent_db:
+                        try:
+                            async with agent_db.begin():
+                                result = await agent.run(ctx, agent_db)
+                            return agent_key, result
+                        except asyncio.CancelledError:
+                            await agent_db.rollback()
+                            raise
+                        except Exception as e:
+                            await agent_db.rollback()
+                            # Check if this is a transaction race condition
+                            if attempt < 2 and (
+                                "another operation is in progress" in str(e).lower()
+                                or "cannot use connection.transaction" in str(e).lower()
+                                or "interfaceerror" in str(e).lower()
+                            ):
+                                # Retry with fresh session
+                                import asyncio as _asyncio
+                                await _asyncio.sleep(0.1 * (attempt + 1))
+                                continue
+                            logger.error("[Orchestrator] Agent '%s' raised: %s", agent_key, e)
+                            return agent_key, None
+                except Exception as outer_e:
+                    if attempt < 2:
+                        import asyncio as _asyncio
+                        await _asyncio.sleep(0.1 * (attempt + 1))
+                        continue
+                    logger.error("[Orchestrator] Agent '%s' failed after retries: %s", agent_key, outer_e)
                     return agent_key, None
+            return agent_key, None
 
         phase2_coroutines: list[tuple[str, asyncio.coroutine]] = []
+        attempted_agents: list[str] = []
         if should_run_nutrition:
+            attempted_agents.append("nutrition")
             phase2_coroutines.append(
                 ("nutrition", _run_agent_isolated(NutritionAdvisorAgent(), "nutrition", context))
             )
         if should_run_fitness:
+            attempted_agents.append("fitness")
             phase2_coroutines.append(
                 ("fitness", _run_agent_isolated(FitnessCoachAgent(), "fitness", context))
             )
         if should_run_research:
+            attempted_agents.append("research")
             phase2_coroutines.append(
                 ("research", _run_agent_isolated(WebResearcherAgent(), "research", context))
             )
@@ -513,7 +575,11 @@ class MultiAgentOrchestrator:
             logger.warning(f"[Orchestrator] Failed to drain proposals: {e}")
 
         total_ms = int((time.time() - start_time) * 1000)
-        logger.info(f"[Orchestrator] Complete in {total_ms}ms — agents ran: {list(agent_results.keys())}")
+        logger.info(
+            f"[Orchestrator] Complete in {total_ms}ms — "
+            f"attempted: {attempted_agents} — "
+            f"succeeded: {list(agent_results.keys())}"
+        )
 
     # ─── Routing Decisions ───────────────────────────────────────────────
 
@@ -548,6 +614,7 @@ class MultiAgentOrchestrator:
     async def _quick_safety_precheck(
         self,
         message: str,
+        memory=None,
     ) -> AgentResult | None:
         """
         Lightweight rule-based safety gate for QUICK mode.
@@ -588,6 +655,21 @@ class MultiAgentOrchestrator:
             kw for kw in URGENT_KEYWORDS
             if kw in msg_lower and not _is_negated(kw, message)
         ]
+
+        # De-duplicate against unresolved symptom events already in memory.
+        # If every triggered keyword is already covered by an active health
+        # event, suppress the popup — the user is referencing an existing
+        # issue, not reporting a new one.
+        if urgent_found and memory is not None:
+            active_descriptions = " ".join(
+                (e.get("description") or "").lower()
+                for e in (memory.health_events or [])
+                if not e.get("resolved", False)
+            )
+            urgent_found = [
+                kw for kw in urgent_found
+                if not _keyword_matches_event(kw, active_descriptions)
+            ]
         if urgent_found:
             logger.warning(
                 "[QuickSafety] Urgent physical keywords in QUICK mode: %s",
@@ -688,8 +770,11 @@ class MultiAgentOrchestrator:
         if "research" in agent_results:
             findings = agent_results["research"].content.get("findings", [])
             if findings:
-                finding_texts = [f["finding"] for f in findings[:2] if isinstance(f, dict)]
-                sections.append(("RESEARCH FINDINGS", "\n".join(finding_texts), 4))
+                # WebResearcher agent uses "key_finding" field, not "finding"
+                finding_texts = [f.get("key_finding", "") or f.get("finding", "") for f in findings[:2] if isinstance(f, dict)]
+                finding_texts = [t for t in finding_texts if t]  # Filter empty strings
+                if finding_texts:
+                    sections.append(("RESEARCH FINDINGS", "\n".join(finding_texts), 4))
 
         # Always include user memory summary (lowest priority)
         mem_parts = []

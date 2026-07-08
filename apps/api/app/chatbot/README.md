@@ -86,10 +86,12 @@ Constraint: max **1 card per response**. On card fire, stream stops and waits fo
 | Field | Default | Purpose |
 |---|---|---|
 | `max_recent_meals` | 5 | Recent meal logs in context |
-| `max_chat_history_messages` | 8 | Chat history messages |
-| `include_weekly_dashboard` | `True` | 7-day nutrition summary |
+| `max_chat_history_messages` | 4 | Chat history messages (paired with `chat_history_message_cap`) |
+| `include_weekly_dashboard` | `False` | 7-day nutrition summary (disabled to stay under Groq TPM 6000 for llama-3.1-8b-instant) |
 | `include_daily_recommendation` | `True` | Latest AI daily plan |
 | `include_progress_logs` | `False` | Body measurements |
+| `profile_free_text_cap` | 200 | Max chars per free-text profile field (health_note, allergies_text, etc.) before sanitization |
+| `chat_history_message_cap` | 200 | Max chars per past chat message kept in context |
 
 ### Sanitisation Points in Context
 

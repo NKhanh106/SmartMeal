@@ -39,6 +39,30 @@ const WELCOME_MESSAGE: ChatMessage = {
   timestamp: new Date(),
 };
 
+// Hide health-symptom proposals whose detail text describes a mental-health
+// intent — those should never surface as "ghi nhận tình trạng sức khỏe"
+// updates. Mirrors the server-side filter in proposal_builder.py; if you
+// add a keyword on one side, add it on the other.
+const MH_NON_SYMPTOM_KEYWORDS = [
+  "tự tử",
+  "muốn chết",
+  "không muốn sống",
+  "tự làm hại",
+  "làm hại bản thân",
+  "kết thúc tất cả",
+  "không còn lý do sống",
+  "chán nản",
+  "tuyệt vọng",
+  "mất hứng sống",
+  "cuộc sống vô nghĩa",
+  "trầm cảm",
+  "depression",
+];
+function isMentalHealthProposal(p: UpdateProposal): boolean {
+  const haystack = `${p.summary} ${p.detail} ${p.source_message ?? ""}`.toLowerCase();
+  return MH_NON_SYMPTOM_KEYWORDS.some((kw) => haystack.includes(kw));
+}
+
 // ─── Depth Preference Hook ───────────────────────────────────────────────────────
 
 const DEPTH_STORAGE_KEY = "smartmeal_depth_preference";
@@ -348,6 +372,10 @@ export function useChatBot() {
             const jsonStr = line.slice("event: update_proposal\ndata: ".length);
             try {
               const proposal = JSON.parse(jsonStr) as UpdateProposal;
+              if (isMentalHealthProposal(proposal)) {
+                // Silently drop — see MH_NON_SYMPTOM_KEYWORDS comment above.
+                continue;
+              }
               setPendingProposals((prev) =>
                 prev.find((p) => p.proposal_id === proposal.proposal_id)
                   ? prev

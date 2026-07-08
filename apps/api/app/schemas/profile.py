@@ -88,8 +88,13 @@ class LifestyleMixin(BaseModel):
     @model_validator(mode="after")
     def validate_time_range(self) -> "LifestyleMixin":
         if self.wake_up_time and self.sleep_time:
-            if self.wake_up_time >= self.sleep_time:
-                raise ValueError("wake_up_time must be earlier than sleep_time")
+            wake_h, wake_m = map(int, self.wake_up_time.split(":"))
+            sleep_h, sleep_m = map(int, self.sleep_time.split(":"))
+            wake_min = wake_h * 60 + wake_m
+            sleep_min = sleep_h * 60 + sleep_m
+            awake_min = (sleep_min - wake_min) % (24 * 60)
+            if awake_min == 0 or awake_min >= 24 * 60 - 1:
+                raise ValueError("sleep_time must differ from wake_up_time (awake duration must be < 24h)")
         return self
 
 

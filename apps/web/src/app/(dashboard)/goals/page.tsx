@@ -415,11 +415,14 @@ function GoalsPageInner() {
                 id="water"
                 type="number"
                 step="0.1"
-                min={0}
-                max={10}
+                min={0.5}
+                max={8}
                 value={formData.water}
                 onChange={(e) => handleChange("water", Number(e.target.value))}
               />
+              <p className="text-xs text-muted-foreground">
+                Minimum 0.5 L (500 ml), maximum 8 L (8000 ml).
+              </p>
             </div>
           </CardContent>
         </Card>

@@ -270,7 +270,7 @@ class WebResearcherAgent(BaseAgent):
                     confidence=1.0,
                     priority=10,
                     text_for_orchestrator=(
-                        "⚠️ Bạn đã sử dụng hết 3 lượt tra cứu web hôm nay. "
+                        "BAN da su dung het 3 luot tra cuu web hom nay. "
                         "Vui lòng quay lại vào ngày mai."
                     ),
                     memory_updates={},
@@ -555,18 +555,19 @@ class WebResearcherAgent(BaseAgent):
 
         client = self._get_groq_client()
 
+        async def _do_call():
+            return await client.chat.completions.create(
+                model=settings.GROQ_TEXT_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+
         response = await asyncio.wait_for(
-            groq_circuit.call(
-                client.chat.completions.create(
-                    model=settings.GROQ_TEXT_MODEL,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                )
-            ),
+            groq_circuit.call(_do_call),
             timeout=30.0,
         )
 
@@ -584,23 +585,49 @@ class WebResearcherAgent(BaseAgent):
         return _get_groq_client()
 
     def _parse_findings_json(self, raw_text: str) -> list[dict[str, Any]]:
-        """Parse AI JSON response into findings list."""
+        """Parse AI JSON response into findings list.
+
+        Robust against the model prefixing the JSON with prose like
+        ``"Dưới đây là thông tin tổng quát:"`` and against a markdown
+        fence (`` ```json `` ... `` ``` ``) wrapping the payload.
+        """
+        import re
+
+        if not raw_text:
+            return []
+
+        # Find the JSON object/array — prefer fenced ```...```, fall back to
+        # the first balanced { ... } or [ ... ] block in the text.
+        text = raw_text.strip()
+
+        fence_match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", text)
+        if fence_match:
+            candidate = fence_match.group(1)
+        else:
+            # No fence — extract from first { or [ to matching close.
+            first_brace = text.find("{")
+            first_bracket = text.find("[")
+            candidates_idx = [i for i in (first_brace, first_bracket) if i != -1]
+            if not candidates_idx:
+                logger.warning("[WebResearcher] No JSON found in response: %s", text[:200])
+                return []
+            start = min(candidates_idx)
+            candidate = text[start:]
+
         try:
-            cleaned = raw_text.strip()
-            if cleaned.startswith("```"):
-                lines = cleaned.splitlines()
-                cleaned = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-            data = json.loads(cleaned)
-            findings = data.get("findings") or []
-            if findings:
-                for f in findings:
-                    f["search_summary"] = data.get("search_summary", "")
-                    f["overall_confidence"] = data.get("confidence", 0.5)
-                return findings
+            data = json.loads(candidate)
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning("[WebResearcher] Failed to parse findings JSON: %s — err=%s",
+                           raw_text[:200], e)
             return []
-        except (json.JSONDecodeError, Exception):
-            logger.warning("[WebResearcher] Failed to parse findings JSON: %s", raw_text[:200])
-            return []
+
+        findings = data.get("findings") or []
+        if findings:
+            for f in findings:
+                f["search_summary"] = data.get("search_summary", "")
+                f["overall_confidence"] = data.get("confidence", 0.5)
+            return findings
+        return []
 
     async def _execute_web_search(
         self,
@@ -685,4 +712,4 @@ class WebResearcherAgent(BaseAgent):
             return ""
 
         summary = "\n".join(parts)
-        return f"🔍 Kết quả nghiên cứu web:\n{summary}"
+        return f"Ket qua nghien cuu web:\n{summary}"

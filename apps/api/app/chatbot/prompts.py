@@ -37,9 +37,20 @@ def build_chatbot_user_prompt(context: dict) -> str:
 
     The AI receives the context as a JSON string, which is unambiguous regardless
     of what characters are embedded in field values.
+
+    Internal fields (keys starting with "_" — e.g. _profile_object holding
+    the live SQLAlchemy ORM UserProfile used by hard-rule card triggers)
+    are stripped before serialization to avoid TypeError on json.dumps.
     """
+    serializable = {k: v for k, v in context.items() if not k.startswith("_")}
     # indent=None → compact; ensure_ascii=False → preserves Vietnamese diacritics
-    context_json = json.dumps(context, indent=None, ensure_ascii=False)
+    context_json = json.dumps(serializable, indent=None, ensure_ascii=False)
+    # Temporary diagnostic — per-top-level-key size breakdown to identify
+    # which field(s) dominate the prompt. Remove after 413 issue is resolved.
+    import sys as _sys
+    _sizes = {k: len(json.dumps(v, ensure_ascii=False)) for k, v in serializable.items()}
+    _top = sorted(_sizes.items(), key=lambda kv: kv[1], reverse=True)[:8]
+    print(f"[prompt-debug] per-key chars (top 8): {_top}", file=_sys.stderr, flush=True)
     return f"""Dưới đây là context cá nhân hóa của người dùng trong hệ thống SmartMeal.
 
 Context:

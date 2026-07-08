@@ -7,7 +7,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.enums import ItemSourceType
+from app.models.enums import ItemSourceType, MealLogStatus
 from app.models.food_nutrition import FoodNutrition
 from app.models.meal import MealItem, MealLog
 from app.models.nutrition_goal import NutritionGoal
@@ -67,10 +67,17 @@ async def create_meal_log_with_items(
         meal_time=meal_time,
         source=payload.source,
         note=payload.note,
+        # When create_meal_log_with_items is reached via the data_writers
+        # fallback path (no matching PENDING preview), the user has already
+        # clicked "Lưu" in the confirm popup, so the freshly inserted row
+        # must be APPROVED — otherwise every confirm leaves the dashboard
+        # with yet another stranded PENDING (and totals never accrue).
+        status=MealLogStatus.APPROVED,
         total_calories=0,
         total_protein_g=0,
         total_carb_g=0,
         total_fat_g=0,
+        extracted_data=payload.extracted_data,
     )
 
     db.add(meal_log)
@@ -101,7 +108,18 @@ async def create_meal_log_with_items(
                 detail=f"Food nutrition not found: {food_id}",
             )
 
-        nutrition = calculate_item_nutrition(food, item_payload.estimated_weight_g)
+        # Prefer DB-derived nutrition; fall back to caller-supplied values
+        # when the food isn't in FoodNutrition (e.g. AI-extracted name not
+        # yet catalogued) but the proposal popup still computed a value.
+        if food is not None:
+            nutrition = calculate_item_nutrition(food, item_payload.estimated_weight_g)
+        else:
+            nutrition = {
+                "calories":  item_payload.calories   if item_payload.calories   is not None else Decimal("0"),
+                "protein_g": item_payload.protein_g  if item_payload.protein_g  is not None else Decimal("0"),
+                "carb_g":    item_payload.carb_g     if item_payload.carb_g     is not None else Decimal("0"),
+                "fat_g":     item_payload.fat_g      if item_payload.fat_g      is not None else Decimal("0"),
+            }
 
         meal_item = MealItem(
             meal_log_id=meal_log.id,

@@ -22,11 +22,14 @@ engine = create_async_engine(
     settings.ASYNC_DATABASE_POOL_URL,
     echo=False,
     future=True,
-    # pool_size=4, max_overflow=12 per worker.
-    # Per-worker ceiling: 4 + 12 = 16 connections.
-    # 4 workers × 16 = 64 max — safely below Supabase free tier (60).
-    pool_size=4,
-    max_overflow=12,
+    # pool_size=8, max_overflow=12 per worker.
+    # Per-worker ceiling: 8 + 12 = 20 connections.
+    # Sized to handle one Phase-2 request (3 agents concurrently) + the
+    # background queue worker + buffer, without starving pool.
+    # 4 workers × 20 = 80 max — Supabase free tier caps at 60, so this is
+    # over budget under burst; reduce workers if Supabase rejects idle conns.
+    pool_size=settings.DATABASE_POOL_SIZE,
+    max_overflow=settings.DATABASE_MAX_OVERFLOW,
     pool_timeout=settings.DATABASE_POOL_TIMEOUT,
     pool_recycle=settings.DATABASE_POOL_RECYCLE,
     pool_pre_ping=settings.DATABASE_POOL_PRE_PING,
@@ -52,7 +55,8 @@ def _on_checkout(dbapi_conn, conn_record, conn_proxy):
     overflow = pool.overflow()
     log_level = logger.warning if checked_out >= int(pool_size * POOL_WARNING_THRESHOLD) else logger.debug
     log_level(
-        "DB connection checkout",
+        "DB connection checkout (checked_out=%d/%d, overflow=%d)",
+        checked_out, pool_size, overflow,
         extra={
             "pool_size": pool_size,
             "checked_out": checked_out,

@@ -406,12 +406,17 @@ async def load_full_user_context(
         today_str = today.isoformat()
 
         today_meals = [m for m in meals if m.get("date") == today_str]
-        if today_meals:
-            ctx.nutrition.today_meals   = today_meals
-            ctx.nutrition.today_kcal    = sum(m.get("kcal", 0) for m in today_meals)
-            ctx.nutrition.today_protein_g = sum(m.get("protein_g", 0) for m in today_meals)
-            ctx.nutrition.today_carb_g  = sum(m.get("carb_g", 0) for m in today_meals)
-            ctx.nutrition.today_fat_g   = sum(m.get("fat_g", 0) for m in today_meals)
+        # Cast totals to float to avoid Decimal-vs-float TypeError when
+        # computing kcal_gap_today = float(kcal_target) - today_kcal below.
+        # Decimal propagates from SQLAlchemy Numeric columns (e.g.
+        # MealLog.total_calories). The annotation today_kcal: float
+        # documents intent but Python dataclasses don't coerce, so we
+        # must do it explicitly here.
+        ctx.nutrition.today_meals       = today_meals
+        ctx.nutrition.today_kcal        = float(sum(m.get("kcal", 0) for m in today_meals))
+        ctx.nutrition.today_protein_g   = float(sum(m.get("protein_g", 0) for m in today_meals))
+        ctx.nutrition.today_carb_g      = float(sum(m.get("carb_g", 0) for m in today_meals))
+        ctx.nutrition.today_fat_g       = float(sum(m.get("fat_g", 0) for m in today_meals))
 
         ctx.nutrition.recent_daily_totals = meals[:7]
 

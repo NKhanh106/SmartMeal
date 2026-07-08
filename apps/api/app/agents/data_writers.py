@@ -12,12 +12,12 @@ from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.memory_service import apply_memory_updates, get_or_create_memory
 from app.models import MealItem, MealLog, NutritionGoal, ProgressLog, UserProfile
-from app.models.enums import MealLogSourceType, MealTypeEnum
+from app.models.enums import ItemSourceType, MealLogSourceType, MealLogStatus, MealTypeEnum
 from app.schemas.meal import MealLogCreate, MealItemCreate
 from app.schemas.update_proposal import UpdateProposal, UpdateTarget
 from app.services.daily_recommendation_service import invalidate_user_plan_cache
@@ -76,7 +76,13 @@ async def execute_confirmed_update(
         )
 
     try:
-        result = await writer(proposal.raw_data, user_id, db)
+        # Pass session_id so writers can locate the PENDING preview record
+        # the background extractor created for this proposal and update it
+        # in place instead of inserting a duplicate row.
+        result = await writer(
+            proposal.raw_data, user_id, db,
+            session_id=proposal.session_id or None,
+        )
         await db.commit()
         await invalidate_user_plan_cache(_user_uuid(user_id))
         return result
@@ -122,8 +128,21 @@ def _user_int(user_id: int | uuid.UUID | str) -> int:
         raise ValueError(f"Cannot convert {user_id!r} to int")
 
 
+def _coerce_uuid(value: Any) -> uuid.UUID | None:
+    """Convert a string/UUID into a UUID object; return None on bad input."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError):
+        return None
+
+
 async def _write_meal_log(
-    data: dict[str, Any], user_id: int, db: AsyncSession
+    data: dict[str, Any], user_id: int, db: AsyncSession,
+    session_id: str | None = None,
 ) -> DataWriteResult:
     raw_items = data.get("items", [])
     if not raw_items:
@@ -138,10 +157,29 @@ async def _write_meal_log(
     meal_time = datetime.fromisoformat(meal_time_str) if meal_time_str else datetime.utcnow()
 
     meal_type_raw = data.get("meal_type", "khac")
-    try:
-        meal_type = MealTypeEnum(meal_type_raw)
-    except (ValueError, TypeError):
-        meal_type = MealTypeEnum.bua_trua
+    # Map extractor output (English) → MealTypeEnum (Vietnamese snake_case).
+    # ExtractorAgent schema returns "breakfast|lunch|dinner|snack|empty".
+    # proposal_builder.py also maps these for display, but the writer must
+    # also translate before passing to MealTypeEnum — otherwise the value
+    # raises ValueError and falls back to bua_trua (wrong meal).
+    meal_type_aliases = {
+        "breakfast": MealTypeEnum.bua_sang,
+        "bua_sang":  MealTypeEnum.bua_sang,
+        "lunch":     MealTypeEnum.bua_trua,
+        "bua_trua":  MealTypeEnum.bua_trua,
+        "dinner":    MealTypeEnum.bua_toi,
+        "bua_toi":   MealTypeEnum.bua_toi,
+        "snack":     MealTypeEnum.an_vat,
+        "an_vat":    MealTypeEnum.an_vat,
+        "empty":     MealTypeEnum.khac,
+    }
+    raw_str = str(meal_type_raw).lower().strip() if meal_type_raw else "khac"
+    meal_type = meal_type_aliases.get(raw_str)
+    if meal_type is None:
+        try:
+            meal_type = MealTypeEnum(raw_str)
+        except (ValueError, TypeError):
+            meal_type = MealTypeEnum.bua_trua
 
     source_raw = data.get("source", "chat_extraction")
     try:
@@ -149,15 +187,68 @@ async def _write_meal_log(
     except (ValueError, TypeError):
         source = MealLogSourceType.chat_extraction
 
+    # Promote the PENDING "preview" record the background extractor created
+    # for this same chat session, so we don't end up with two rows (PENDING
+    # + APPROVED) for one confirmed meal. If no PENDING matches the session
+    # (e.g. legacy flow, manual entry, or extractor was disabled) fall back
+    # to inserting a fresh row.
+    promoted = await _promote_pending_meal_log(
+        db=db,
+        user_uuid=user_uuid,
+        session_id=session_id,
+        raw_items=raw_items,
+        meal_type=meal_type,
+        meal_time=meal_time,
+        source=source,
+        note=data.get("notes"),
+    )
+    if promoted is not None:
+        logger.info(
+            "[DataWriter] Promoted existing PENDING MealLog to APPROVED "
+            "for user %s session %s meal_type=%s meal_time=%s",
+            user_uuid, session_id, meal_type, meal_time
+        )
+        return promoted
+
+    # No PENDING found — create a new APPROVED MealLog directly
+    logger.info(
+        "[DataWriter] No PENDING MealLog found, creating new APPROVED MealLog "
+        "for user %s session %s meal_type=%s meal_time=%s",
+        user_uuid, session_id, meal_type, meal_time
+    )
+
     meal_log_payload = MealLogCreate(
         meal_type=meal_type,
         meal_time=meal_time,
         source=source,
         note=data.get("notes"),
+        # Persist session_id inside extracted_data so any subsequent
+        # `_promote_pending_meal_log` call for the same chat session still
+        # matches this APPROVED row (e.g. if the user re-confirms or
+        # re-extracts from the same session later). Without this, the JSONB
+        # lookup has nothing to key on and the writer creates a fresh row
+        # every time, leaving orphan PENDING previews behind.
+        extracted_data=(
+            {
+                "session_id": str(session_id) if session_id is not None else None,
+                "items": raw_items,
+            }
+            if session_id is not None
+            else None
+        ),
         items=[
             MealItemCreate(
                 detected_food_name=item.get("detected_food_name", item.get("food_name", "Unknown")),
                 estimated_weight_g=item.get("estimated_weight_g", item.get("quantity", 100)),
+                food_nutrition_id=_coerce_uuid(item.get("food_nutrition_id")),
+                # Persist AI/DB-computed nutrition so the MealLog row keeps
+                # non-zero totals even if food_nutrition_id is unset (food
+                # not in catalog). Without this, total_calories silently
+                # resets to 0 on dashboard.
+                calories=item.get("calories"),
+                protein_g=item.get("protein_g"),
+                carb_g=item.get("carb_g"),
+                fat_g=item.get("fat_g"),
             )
             for item in raw_items
         ],
@@ -172,13 +263,7 @@ async def _write_meal_log(
             error=str(e),
         )
 
-    meal_type_vn = {
-        MealTypeEnum.bua_sang: "Bữa sáng",
-        MealTypeEnum.bua_trua: "Bữa trưa",
-        MealTypeEnum.bua_toi: "Bữa tối",
-        MealTypeEnum.an_vat: "Ăn vặt",
-        MealTypeEnum.khac: "Bữa ăn",
-    }.get(meal_log.meal_type, "Bữa ăn")
+    meal_type_vn = _meal_type_vn(meal_log.meal_type)
 
     return DataWriteResult(
         success=True, target=UpdateTarget.MEAL_LOG,
@@ -187,8 +272,117 @@ async def _write_meal_log(
     )
 
 
+async def _promote_pending_meal_log(
+    db: AsyncSession,
+    user_uuid: uuid.UUID,
+    session_id: str | None,
+    raw_items: list[dict[str, Any]],
+    meal_type: MealTypeEnum,
+    meal_time: datetime,
+    source: MealLogSourceType,
+    note: str | None,
+) -> DataWriteResult | None:
+    """Find the PENDING MealLog the background extractor pre-wrote for this
+    session and promote it to APPROVED with the confirmed items attached.
+
+    Returns None when there is no matching PENDING so the caller can fall
+    back to creating a fresh MealLog row.
+    """
+    if not session_id:
+        return None
+
+    from sqlalchemy import cast, type_coerce
+    from sqlalchemy.dialects.postgresql import JSONB
+    from sqlalchemy.types import String
+
+    # The background extractor stores session_id inside the extracted_data
+    # JSONB column. Match on that so we update the preview row in place.
+    stmt = select(MealLog).where(
+        MealLog.user_id == user_uuid,
+        MealLog.status == MealLogStatus.PENDING,
+        cast(
+            type_coerce(MealLog.extracted_data, JSONB)["session_id"],
+            String,
+        ) == str(session_id),
+    ).order_by(MealLog.created_at.desc()).limit(1)
+
+    pending = (await db.execute(stmt)).scalar_one_or_none()
+    if pending is None:
+        logger.debug(
+            "[DataWriter] No PENDING MealLog found for user %s session %s "
+            "(will create new APPROVED row directly)",
+            user_uuid, session_id
+        )
+        return None
+
+    logger.info(
+        "[DataWriter] Found PENDING MealLog id=%s for user %s session %s, promoting to APPROVED",
+        pending.id, user_uuid, session_id
+    )
+
+    # Replace stale preview MealItem rows (PENDING pre-writes usually have
+    # none, but defend against any future schema that pre-populates them).
+    await db.execute(
+        delete(MealItem).where(MealItem.meal_log_id == pending.id)
+    )
+
+    # Update the MealLog itself.
+    pending.status = MealLogStatus.APPROVED
+    pending.meal_type = meal_type
+    pending.meal_time = meal_time
+    pending.source = source
+    if note:
+        pending.note = note
+    # Totals will be recalculated from the freshly-attached MealItem rows.
+    pending.total_calories = 0
+    pending.total_protein_g = 0
+    pending.total_carb_g = 0
+    pending.total_fat_g = 0
+    await db.flush()
+
+    # Attach the confirmed MealItem rows.
+    for item in raw_items:
+        food_id = _coerce_uuid(item.get("food_nutrition_id"))
+        db.add(MealItem(
+            meal_log_id=pending.id,
+            food_nutrition_id=food_id,
+            detected_food_name=item.get("detected_food_name", item.get("food_name", "Unknown")),
+            display_food_name=item.get("display_food_name"),
+            estimated_weight_g=float(item.get("estimated_weight_g") or item.get("quantity") or 100),
+            calories=float(item.get("calories") or 0),
+            protein_g=float(item.get("protein_g") or 0),
+            carb_g=float(item.get("carb_g") or 0),
+            fat_g=float(item.get("fat_g") or 0),
+            confidence=float(item.get("confidence")) if item.get("confidence") is not None else None,
+            source=item.get("source") or ItemSourceType.ai_nhan_dien,
+        ))
+
+    # Sum attached items into MealLog totals so dashboard reads the right
+    # value without an extra roundtrip.
+    await recalculate_meal_totals(db, pending.id)
+
+    meal_type_vn = _meal_type_vn(pending.meal_type)
+    return DataWriteResult(
+        success=True, target=UpdateTarget.MEAL_LOG,
+        message=f"Đã lưu {meal_type_vn} (~{pending.total_calories:.0f} kcal)",
+        records_created=len(raw_items),
+        records_updated=1,
+    )
+
+
+def _meal_type_vn(meal_type: MealTypeEnum) -> str:
+    return {
+        MealTypeEnum.bua_sang: "Bữa sáng",
+        MealTypeEnum.bua_trua: "Bữa trưa",
+        MealTypeEnum.bua_toi: "Bữa tối",
+        MealTypeEnum.an_vat: "Ăn vặt",
+        MealTypeEnum.khac: "Bữa ăn",
+    }.get(meal_type, "Bữa ăn")
+
+
 async def _write_body_weight(
-    data: dict[str, Any], user_id: int, db: AsyncSession
+    data: dict[str, Any], user_id: int, db: AsyncSession,
+    session_id: str | None = None,
 ) -> DataWriteResult:
     weight = data.get("weight_kg")
     if not weight:
@@ -245,7 +439,8 @@ async def _write_body_weight(
 
 
 async def _write_body_measurement(
-    data: dict[str, Any], user_id: int, db: AsyncSession
+    data: dict[str, Any], user_id: int, db: AsyncSession,
+    session_id: str | None = None,
 ) -> DataWriteResult:
     user_uuid = _user_uuid(user_id)
     progress = ProgressLog(
@@ -271,7 +466,8 @@ async def _write_body_measurement(
 
 
 async def _write_health_symptom(
-    data: dict[str, Any], user_id: int, db: AsyncSession
+    data: dict[str, Any], user_id: int, db: AsyncSession,
+    session_id: str | None = None,
 ) -> DataWriteResult:
     new_event = {
         "event_id": str(uuid.uuid4()),
@@ -297,7 +493,8 @@ async def _write_health_symptom(
 
 
 async def _write_health_recovery(
-    data: dict[str, Any], user_id: int, db: AsyncSession
+    data: dict[str, Any], user_id: int, db: AsyncSession,
+    session_id: str | None = None,
 ) -> DataWriteResult:
     memory = await get_or_create_memory(_user_int(user_id), db)
     events = memory.health_events or []
@@ -324,7 +521,8 @@ async def _write_health_recovery(
 
 
 async def _write_workout_log(
-    data: dict[str, Any], user_id: int, db: AsyncSession
+    data: dict[str, Any], user_id: int, db: AsyncSession,
+    session_id: str | None = None,
 ) -> DataWriteResult:
     await apply_memory_updates(
         _user_int(user_id),
@@ -351,7 +549,8 @@ async def _write_workout_log(
 
 
 async def _write_muscle_soreness(
-    data: dict[str, Any], user_id: int, db: AsyncSession
+    data: dict[str, Any], user_id: int, db: AsyncSession,
+    session_id: str | None = None,
 ) -> DataWriteResult:
     areas = data.get("sore_areas", [])
     action = data.get("action", "add")
@@ -380,7 +579,8 @@ async def _write_muscle_soreness(
 
 
 async def _write_profile_metric(
-    data: dict[str, Any], user_id: int, db: AsyncSession
+    data: dict[str, Any], user_id: int, db: AsyncSession,
+    session_id: str | None = None,
 ) -> DataWriteResult:
     field_mapping = {
         "height_cm": "height_cm",
@@ -412,7 +612,8 @@ async def _write_profile_metric(
 
 
 async def _write_sleep_log(
-    data: dict[str, Any], user_id: int, db: AsyncSession
+    data: dict[str, Any], user_id: int, db: AsyncSession,
+    session_id: str | None = None,
 ) -> DataWriteResult:
     hours = data.get("hours")
     quality = data.get("quality")
@@ -441,7 +642,8 @@ async def _write_sleep_log(
 
 
 async def _write_nutrition_goal(
-    data: dict[str, Any], user_id: int, db: AsyncSession
+    data: dict[str, Any], user_id: int, db: AsyncSession,
+    session_id: str | None = None,
 ) -> DataWriteResult:
     field_mapping = {
         "daily_calories": "daily_calorie_target",

@@ -50,7 +50,7 @@ DEPTH_CONFIGS = {
         health_tokens=0,
         nutrition_tokens=0,
         fitness_tokens=0,
-        final_response_tokens=400,
+        final_response_tokens=1000,
 
         temperature=0.4,
         system_prompt_variant="quick",
@@ -71,14 +71,14 @@ DEPTH_CONFIGS = {
         run_fitness_coach=True,
         run_web_researcher=False,
 
-        phase1_timeout=3.0,
-        phase2_timeout=4.0,
+        phase1_timeout=12.0,
+        phase2_timeout=8.0,
 
         extractor_tokens=600,
-        health_tokens=500,
-        nutrition_tokens=600,
-        fitness_tokens=500,
-        final_response_tokens=700,
+        health_tokens=1000,
+        nutrition_tokens=1000,
+        fitness_tokens=800,
+        final_response_tokens=1500,
 
         temperature=0.5,
         system_prompt_variant="deep",
@@ -99,14 +99,14 @@ DEPTH_CONFIGS = {
         run_fitness_coach=True,
         run_web_researcher=True,
 
-        phase1_timeout=5.0,
-        phase2_timeout=8.0,
+        phase1_timeout=20.0,
+        phase2_timeout=15.0,
 
         extractor_tokens=800,
-        health_tokens=800,
-        nutrition_tokens=800,
-        fitness_tokens=800,
-        final_response_tokens=1200,
+        health_tokens=1500,
+        nutrition_tokens=1500,
+        fitness_tokens=1200,
+        final_response_tokens=2000,
 
         temperature=0.6,
         system_prompt_variant="expert",

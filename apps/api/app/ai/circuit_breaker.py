@@ -72,7 +72,7 @@ class CircuitBreaker:
             if self._state == CircuitState.HALF_OPEN:
                 self._success_count += 1
                 if self._success_count >= self.success_threshold:
-                    logger.info("Circuit [%s]: HALF_OPEN → CLOSED ✅", self.name)
+                    logger.info("Circuit [%s]: HALF_OPEN → CLOSED", self.name)
                     self._state = CircuitState.CLOSED
                     self._success_count = 0
 

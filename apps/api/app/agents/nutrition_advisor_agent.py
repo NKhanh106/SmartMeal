@@ -412,13 +412,54 @@ class NutritionAdvisorAgent(BaseAgent):
                 )
                 return None
 
+            def _enum_value(x):
+                return x.value if hasattr(x, "value") else x
+
+            # Math engine (app/services/nutrition_math.py) uses English enum
+            # values while the DB / Profile layer uses Vietnamese snake_case.
+            # This adapter bridges the two schemas without changing either.
+            ACTIVITY_TO_MATH = {
+                "it_van_dong":       "sedentary",
+                "van_dong_nhe":      "light",
+                "van_dong_vua":      "moderate",
+                "van_dong_nhieu":    "active",
+                "van_dong_rat_nhieu": "very_active",
+            }
+            GOAL_TO_MATH = {
+                "giam_can":           "deficit",
+                "tang_can":           "surplus",
+                "tang_co":            "surplus",
+                "giu_can":            "maintain",
+                "maintain_shape":     "maintain",
+                "balanced_lifestyle": "maintain",
+                "weight_loss":        "deficit",
+                "weight_gain":        "surplus",
+                "muscle_gain":        "surplus",
+                "sports_performance": "maintain",
+                "medical_treatment":  "maintain",
+                "nutrient_supplement": "maintain",
+            }
+
+            activity_raw = _enum_value(activity)
+            goal_raw = _enum_value(goal_type)
+            activity_str = ACTIVITY_TO_MATH.get(activity_raw, "moderate")
+            goal_str = GOAL_TO_MATH.get(goal_raw, "maintain")
+
+            gender_str = _enum_value(gender)
+            # Mifflin-St Jeor only models biological sex, so non-binary /
+            # undisclosed genders must be mapped. Default to "nam" to avoid
+            # a math-engine ValueError on the unsupported enum values
+            # ("khac", "khong_muon_noi") defined in app/models/enums.py.
+            if gender_str not in ("nam", "nu", "male", "female"):
+                gender_str = "nam"
+
             result = calculate_macro_targets(
                 weight_kg=float(weight),
                 height_cm=float(height),
                 age=int(age),
-                gender=str(gender),
-                activity_level=str(activity),
-                nutrition_goal_type=str(goal_type),
+                gender=gender_str,
+                activity_level=activity_str,
+                nutrition_goal_type=goal_str,
             )
 
             return {
@@ -454,7 +495,7 @@ class NutritionAdvisorAgent(BaseAgent):
             f"  Goal:              {macro_data['goal_type']}",
         ]
         if macro_data.get("is_using_floor"):
-            lines.append("  ⚠ Note: Deficit clamped to BMR floor (safe minimum).")
+            lines.append("  CANH BAO: Deficit clamped to BMR floor (safe minimum).")
         lines.append("━━━ END MACRO CALCULATOR ━━━\n")
         return "\n".join(lines)
 
@@ -704,10 +745,15 @@ Return ONLY valid JSON:
                             # Expand allergens to all synonyms / hidden sources
                             hard_avoid.extend(_expand_allergens(allergen_name))
                 if hasattr(profile, "dietary_restrictions") and profile.dietary_restrictions:
-                    hard_avoid.extend(profile.dietary_restrictions)
+                    for r in profile.dietary_restrictions:
+                        if isinstance(r, dict):
+                            hard_avoid.append(str(r.get("name") or r.get("restriction") or r.get("type") or ""))
+                        else:
+                            hard_avoid.append(str(r))
 
-            # Deduplicate after expansion
-            hard_avoid = list(set(hard_avoid))
+            # Deduplicate after expansion — coerce to str first to avoid
+            # TypeError when a restriction row somehow contains a dict.
+            hard_avoid = list({str(x) for x in hard_avoid if x})
 
             # ── Demographic Safety Constraints ─────────────────────────────────
             # These block dangerous advice for pregnant, breastfeeding, minor, elderly users.
@@ -728,7 +774,7 @@ Return ONLY valid JSON:
                     "high_mercury_fish",
                 ])
                 demographic_disclaimer = (
-                    "⚠️ QUAN TRỌNG: Người dùng đang MANG THAI. "
+                    "QUAN TRONG: Nguoi dung dang MANG THAI. "
                     "KHÔNG được gợi ý giảm cân, hạn chế calo, nhịn ăn, "
                     "hoặc bất kỳ thực phẩm nguy hiểm cho thai kỳ (cá ngừ lớn, "
                     "phô mai tươi, đồ sống). Thay vào đó, tập trung dinh dưỡng "
@@ -779,10 +825,10 @@ Return ONLY valid JSON:
             if drug_warnings:
                 warning_block = " | ".join(drug_warnings)
                 if demographic_disclaimer:
-                    demographic_disclaimer += f"\n⚠️ TƯƠNG TÁC THUỐC-THỰC PHẨM: {warning_block}"
+                    demographic_disclaimer += f"\nTUONG TAC THUOC-THUC PHAM: {warning_block}"
                 else:
                     demographic_disclaimer = (
-                        f"⚠️ TƯƠNG TÁC THUỐC-THỰC PHẨM: {warning_block}"
+                        f"TUONG TAC THUOC-THUC PHAM: {warning_block}"
                     )
 
             # ── 4. Build soft constraints (avoid today) ───────────────────────────
@@ -967,7 +1013,10 @@ Return ONLY valid JSON:
             return agent_result
 
         except Exception as e:
-            logger.error(f"NutritionAdvisorAgent failed: {e}")
+            # logger.exception logs the full traceback so we can pinpoint the
+            # exact line raising on float-Decimal operand errors (which is not
+            # visible from str(e) alone).
+            logger.exception(f"NutritionAdvisorAgent failed: {e}")
             err_result = AgentResult(
                 agent_name=self.name, success=False,
                 insight_type="nutrition_recommendation", content={},
@@ -1248,8 +1297,6 @@ MODE B (clarification) — return this JSON:
                 clean_suggestions.append(s)
 
         data["meal_suggestions"] = clean_suggestions
-
-        # Fallback if ALL suggestions were removed by allergen filtering
         if not clean_suggestions and flagged_suggestions:
             logger.warning(
                 "[NutritionAdvisor] ALL suggestions filtered by allergens. "

@@ -35,11 +35,11 @@ def _goal_label(goal: str | None) -> str:
 
 def _adherence_label(adherence: str) -> str:
     return {
-        "significantly_under": "⚠️ Ăn thiếu nhiều so với mục tiêu",
+        "significantly_under": "Ăn thiếu nhiều so với mục tiêu",
         "slightly_under":      "Ăn hơi thiếu",
-        "on_track":             "✅ Đang đạt mục tiêu",
+        "on_track":             "Đang đạt mục tiêu",
         "slightly_over":        "Ăn hơi vượt",
-        "significantly_over":   "⚠️ Ăn vượt nhiều",
+        "significantly_over":   "Ăn vượt nhiều",
     }.get(adherence, adherence)
 
 
@@ -363,7 +363,7 @@ def build_fitness_coach_context(ctx: FullUserContext) -> str:
     if ctx.body.sleep_last_night_hours:
         h = ctx.body.sleep_last_night_hours
         if h < 6:
-            note = "⚠️ Low sleep — do light exercise, prioritize recovery"
+            note = "Low sleep — do light exercise, prioritize recovery"
         elif h >= 7:
             note = "Good sleep — can train normally"
         else:
@@ -481,6 +481,6 @@ def build_orchestrator_summary(ctx: FullUserContext) -> str:
         lines.append(f"Allergies: {', '.join(hard_avoid)}")
 
     if ctx.profile_completeness < 0.5:
-        lines.append("⚠️ Profile incomplete — base recommendations on available data")
+        lines.append("Profile incomplete — base recommendations on available data")
 
     return "\n".join(lines) if lines else ""

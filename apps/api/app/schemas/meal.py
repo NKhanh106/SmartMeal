@@ -16,6 +16,16 @@ class MealItemCreate(BaseModel):
 
     estimated_weight_g: Decimal = Field(..., gt=0)
 
+    # Pre-computed nutrition. Used when food_nutrition_id is None (e.g. AI
+    # extractor matched the food name in the proposal builder but the food
+    # is not in the local FoodNutrition table) so the persisted MealItem
+    # keeps a non-zero total_calories and the dashboard reflects what the
+    # user actually confirmed in the proposal popup.
+    calories: Optional[Decimal] = Field(None, ge=0)
+    protein_g: Optional[Decimal] = Field(None, ge=0)
+    carb_g: Optional[Decimal] = Field(None, ge=0)
+    fat_g: Optional[Decimal] = Field(None, ge=0)
+
     source: Optional[ItemSourceType] = None
     confidence: Optional[Decimal] = Field(None, ge=0, le=1)
 
@@ -32,6 +42,16 @@ class MealLogCreate(BaseModel):
     note: Optional[str] = None
 
     items: list[MealItemCreate] = Field(..., min_length=1)
+
+    extracted_data: Optional[dict] = Field(
+        None,
+        description=(
+            "Optional JSONB payload to persist on the MealLog (used by the AI "
+            "writer fallback so the new APPROVED row carries the chat session "
+            "id and a future `_promote_pending_meal_log` call can still find "
+            "and reuse it instead of inserting another row)."
+        ),
+    )
 
 
 class MealItemResponse(BaseModel):

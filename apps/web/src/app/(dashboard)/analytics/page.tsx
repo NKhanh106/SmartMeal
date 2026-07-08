@@ -26,6 +26,10 @@ import { cn } from "@/lib/utils";
 
 const PIE_COLORS = ["#3b82f6", "#10b981", "#f59e0b"];
 
+// Decimal fields from FastAPI serialize as strings (e.g. "16232.00").
+// Coerce to number before arithmetic to avoid string-concat in reduce.
+const toNum = (v: unknown): number => (v == null ? 0 : Number(v));
+
 function ChartCard({
   title,
   children,
@@ -91,13 +95,13 @@ export default function AnalyticsPage() {
     fetchData();
   }, [fetchData]);
 
-  // Build weekly calorie chart data
+// Build weekly calorie chart data
   const weeklyChartData = weekly?.daily_items.map((item) => {
     const date = new Date(item.date);
     const label = date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
     return {
       date: label,
-      calories: item.total_calories,
+      calories: toNum(item.total_calories),
     };
   }) ?? [];
 
@@ -117,25 +121,25 @@ export default function AnalyticsPage() {
   // Macro ratio from weekly totals
   const macroData = weekly
     ? [
-        { name: "Protein", value: weekly.total_protein_g, color: "#3b82f6" },
-        { name: "Carbs", value: weekly.total_carb_g, color: "#10b981" },
-        { name: "Fat", value: weekly.total_fat_g, color: "#f59e0b" },
+        { name: "Protein", value: toNum(weekly.total_protein_g), color: "#3b82f6" },
+        { name: "Carbs", value: toNum(weekly.total_carb_g), color: "#10b981" },
+        { name: "Fat", value: toNum(weekly.total_fat_g), color: "#f59e0b" },
       ]
     : [];
 
   // Compute weekly summary stats
-  const daysWithData = weekly?.daily_items.filter((d) => d.total_calories > 0) ?? [];
+  const daysWithData = weekly?.daily_items.filter((d) => toNum(d.total_calories) > 0) ?? [];
   const avgCalories = daysWithData.length > 0
-    ? Math.round(daysWithData.reduce((s, d) => s + d.total_calories, 0) / daysWithData.length)
+    ? Math.round(daysWithData.reduce((s, d) => s + toNum(d.total_calories), 0) / daysWithData.length)
     : null;
   const avgProtein = daysWithData.length > 0
-    ? Math.round(daysWithData.reduce((s, d) => s + d.total_protein_g, 0) / daysWithData.length)
+    ? Math.round(daysWithData.reduce((s, d) => s + toNum(d.total_protein_g), 0) / daysWithData.length)
     : null;
   const avgCarbs = daysWithData.length > 0
-    ? Math.round(daysWithData.reduce((s, d) => s + d.total_carb_g, 0) / daysWithData.length)
+    ? Math.round(daysWithData.reduce((s, d) => s + toNum(d.total_carb_g), 0) / daysWithData.length)
     : null;
   const avgFat = daysWithData.length > 0
-    ? Math.round(daysWithData.reduce((s, d) => s + d.total_fat_g, 0) / daysWithData.length)
+    ? Math.round(daysWithData.reduce((s, d) => s + toNum(d.total_fat_g), 0) / daysWithData.length)
     : null;
 
   // Weight change
@@ -146,10 +150,11 @@ export default function AnalyticsPage() {
     weightChange = Math.round((last - first) * 10) / 10;
   }
 
-  const calorieTarget = weekly?.active_goal?.daily_calorie_target;
+  const calorieTarget = toNum(weekly?.active_goal?.daily_calorie_target);
   const daysOnTarget = daysWithData.filter((d) => {
     if (!calorieTarget) return false;
-    return d.total_calories > 0 && d.total_calories <= calorieTarget * 1.1;
+    const cal = toNum(d.total_calories);
+    return cal > 0 && cal <= calorieTarget * 1.1;
   }).length;
   const goalAdherence = daysWithData.length > 0 && calorieTarget
     ? Math.round((daysOnTarget / daysWithData.length) * 100)

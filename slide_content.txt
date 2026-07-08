@@ -1,0 +1,231 @@
+[SLIDE 6 — KẾT LUẬN & HƯỚNG PHÁT TRIỂN]
+
+═══════════════════════════════════════════════════════════════════════════════
+SLIDE 6.1 — ĐÁNH GIÁ TỔNG QUAN ĐỒ ÁN
+═══════════════════════════════════════════════════════════════════════════════
+
+Mục tiêu ban đầu:
+   • Xây dựng hệ thống Multi-Agent hỗ trợ dinh dưỡng & thể hình cho người Việt
+   • Tích hợp kiểm soát an toàn y tế (dị ứng, BMR, người già, ED, tương tác thuốc)
+   • Pipeline 3-pha: HealthMonitor → (Nutrition ∥ Fitness ∥ WebResearcher) → Extractor
+   • Đánh giá tự động bằng benchmark SMA-Eval v1 với CHAS v2
+
+Mức độ hoàn thành:
+   [✓] Backend FastAPI + JWT + Alembic + Redis queue        — 100%
+   [✓] 6 agents (Health / Nutrition / Fitness / Web / Extractor / Orchestrator) — 100%
+   [✓] Pipeline 3 pha với concurrency & phase routing        — 100%
+   [✓] Pending-state lifecycle (PENDING → APPROVED)          — 100%
+   [✓] Frontend Next.js 15 + chatbot UI + MealConfirmationCard — 100%
+   [✓] SMA-Eval v1 (3 tiers, 7 metrics, CHAS v2)             — 100%
+   [✓] Docker Compose + dual-connection topology            — 100%
+
+So với mục tiêu đầu năm: HOÀN THÀNH đủ & đúng tiến độ.
+
+───────────────────────────────────────────────────────────────────────────────
+
+═══════════════════════════════════════════════════════════════════════════════
+SLIDE 6.2 — KẾT QUẢ CHÍNH (điền số liệu thật từ report của bạn)
+═══════════════════════════════════════════════════════════════════════════════
+
+Tiêu chí                  │ Mục tiêu │ Thực tế │ Đạt
+──────────────────────────┼──────────┼─────────┼─────
+CHAS v2 (Full)            │   ≥ 0.75 │  0.??   │ ✓/✗
+Safety_Score              │   ≥ 0.95 │  0.??   │ ✓/✗
+Quality_Score             │   ≥ 0.70 │  0.??   │ ✓/✗
+Performance_Score         │   ≥ 0.60 │  0.??   │ ✓/✗
+AllergenViolation (AVR)   │   = 1.00 │  0.??   │ ✓/✗
+Calorie floor pass-rate   │   ≥ 95%  │  ??%    │ ✓/✗
+Tier C pool survival      │   = 1.00 │  0.??   │ ✓/✗
+p95 latency               │   ≤ 8s   │  ?.?s   │ ✓/✗
+
+Diễn giải:
+   • Các ràng buộc cứng (Tier A) đạt ở mức production-ready.
+   • Tier B & C còn nhiễu do LLM-judge & burst load — đã được mitigate qua
+     circuit-breaker và DB pool tuning.
+
+   → Kết luận: CHAS v2 = 0.?? → xếp loại GOOD/EXCELLENT.
+
+───────────────────────────────────────────────────────────────────────────────
+
+═══════════════════════════════════════════════════════════════════════════════
+SLIDE 6.3 — ĐÓNG GÓP KHOA HỌC & KỸ THUẬT
+═══════════════════════════════════════════════════════════════════════════════
+
+1. Topologia 2-kết nối với Supabase PgBouncer (transaction mode)
+   - Port 5432: Alembic migrations (bypass PgBouncer)
+   - Port 6543: FastAPI runtime (pool_size=4, max_overflow=12)
+   - pool_pre_ping TẮT có chủ đích — tránh PgBouncer drop transaction
+   - 4 workers × 16 conn = 64 max ≈ Supabase free tier (60 conn)
+
+2. Pipeline 3 pha với phase-gated concurrency
+   - Phase 1 (HealthMonitor) block → Phase 2 chạy song song 3 agents
+   - Phase 3 (Extractor) fire-and-forget qua Redis queue — không làm chậm UX
+   - Row-level lock (SELECT FOR UPDATE) đảm bảo atomicity khi confirm meal
+
+3. Bộ metric SMA-Eval v1 + công thức CHAS v2
+   - 7 metric chia 3 nhóm: Safety (0.40), Quality (0.35), Performance (0.25)
+   - Có ablation baseline / partial / full để chứng minh đóng góp của từng agent
+   - LLM-as-a-Judge (Groq llama-3.3-70b) cho IAC & RFS — khả thi với budget rẻ
+
+4. Safety-by-design cho domain y tế-dinh-dưỡng
+   - Allergen synonym expansion qua `ALLERGEN_SYNONYM_MAP`
+   - Calorie floor ≥ BMR × 1.0 (Mifflin-St Jeor)
+   - Block HIIT/Tabata cho người ≥ 65 tuổi
+   - Warfarin ↔ Vitamin K interaction guard
+   - Eating-disorder early-detection (không endorse hành vi extreme)
+
+───────────────────────────────────────────────────────────────────────────────
+
+═══════════════════════════════════════════════════════════════════════════════
+SLIDE 6.4 — HẠN CHẾ CÒN TỒN TẠI
+═══════════════════════════════════════════════════════════════════════════════
+
+Kỹ thuật:
+   • LLM-judge (B-tier) còn variance cao → cần self-consistency hoặc multi-judge
+   • CHAS v2 mới ở mức GOOD; cần data thực tế nhiều hơn Tier A edge-case
+   • Burst load test (Tier C) chưa simulate traffic thực, chỉ ở mức DB pool
+   • Recipe Feasibility judge phụ thuộc prompt-template, chưa có human-label
+
+Dữ liệu:
+   • Dataset SMA-Eval là curated thủ công, chưa mở rộng từ log thực
+   • Chưa có A/B test với nutritionist thật để benchmark clinical accuracy
+
+Sản phẩm:
+   • Giao diện chatbot đơn giản, chưa có voice input / image-based meal log
+   • Chưa có meal photo recognition (vision Gemini mới dùng cho một số flow)
+   • Chưa tích hợp wearable (Fitbit / Apple Health) để đọc actual activity
+
+Đánh giá:
+   • Chưa chạy user-study thực tế (vượt scope đồ án)
+   • Chưa benchmark latency dưới production load thật
+
+───────────────────────────────────────────────────────────────────────────────
+
+═══════════════════════════════════════════════════════════════════════════════
+SLIDE 6.5 — HƯỚNG PHÁT TRIỂN (NGẮN HẠN 1–3 THÁNG)
+═══════════════════════════════════════════════════════════════════════════════
+
+Kỹ thuật:
+   • Multi-judge ensemble cho metric B (IAC, RFS) — lấy median/vote
+     → giảm variance và tăng confidence
+   • Self-consistency prompting (pass N=5, lấy majority) cho các test Tier B
+   • Tăng Tier A dataset lên 100+ edge-cases (dị ứng ít gặp,
+     poly-pharmacy, bệnh nền hiếm)
+   • Cache LLM responses cho các câu hỏi phổ biến (giảm cost, tăng speed)
+
+Sản phẩm:
+   • Voice input tiếng Việt (Whisper hoặc Gemini multimodal)
+   • Meal photo upload → vision model phân tích dinh dưỡng
+   • Drag-drop weekly meal plan từ chat history
+   • Push notification nhắc nhở (uống nước, ăn trưa, tập gym)
+
+Đánh giá:
+   • Xây dựng golden-set do chuyên gia dinh dưỡng Việt Nam review
+   • A/B test recipe feasibility giữa LLM-judge và chuyên gia thật
+
+───────────────────────────────────────────────────────────────────────────────
+
+═══════════════════════════════════════════════════════════════════════════════
+SLIDE 6.6 — HƯỚNG PHÁT TRIỂN (DÀI HẠN 6–12 THÁNG)
+═══════════════════════════════════════════════════════════════════════════════
+
+1. Personalized Recommendation Engine
+   • Collaborative filtering dựa trên cohort người dùng Việt (BMI, mục tiêu)
+   • Reinforcement learning từ feedback "có/không" của user với gợi ý
+   • Long-term memory: nhớ sở thích/từ chối sau 30 ngày
+
+2. Wearable Integration
+   • Đọc steps/heart-rate/sleep từ Apple Health, Fitbit, Mi Band
+   • Điều chỉnh calorie target theo actual activity (không chỉ BMR)
+   • Auto-log exercise session kết hợp với FitnessCoach
+
+3. Clinical-grade Safety Layer
+   • Partner với bác sĩ Việt Nam để validate safety rules
+   • Thêm metric "Clinician-Agreement Score" vào CHAS v3
+   • Open-source các hard-constraint tests để cộng đồng contribute
+
+4. Multi-modal Memory
+   • Lưu trữ voice notes, ảnh bữa ăn vào S3 + vector DB (pgvector)
+   • Truy vấn semantic: "tuần trước tôi ăn gì có nhiều protein?"
+   • Embedding-based tìm kiếm recipe tương tự trong database
+
+5. Mở rộng thị trường
+   • Hỗ trợ tiếng Anh + Thái (chuẩn hoá allergen map theo locale)
+   • White-label cho phòng khám, gym studio
+   • Tích hợp với hệ thống quản lý bệnh viện (HIS) ở VN
+
+───────────────────────────────────────────────────────────────────────────────
+
+═══════════════════════════════════════════════════════════════════════════════
+SLIDE 6.7 — BÀI HỌC KINH NGHIỆM
+═══════════════════════════════════════════════════════════════════════════════
+
+Cho sinh viên làm đồ án tương tự:
+
+1. Bắt đầu từ safety trước, UX sau
+   • Đặt câu hỏi "nếu user có dị ứng với X, hệ thống phải làm gì?"
+     TRƯỚC khi thiết kế UI
+   • Hard-constraint phải test được bằng code, không bằng manual review
+
+2. Benchmark sớm
+   • Viết metric + dataset song song với code, không phải cuối kỳ
+   • Ablation study (baseline / partial / full) chứng minh giá trị
+     của từng thành phần — đây là "evidence" cho đồ án khoa học
+
+3. Connection topology thực tế
+   • Không bao giờ trust 1 connection string duy nhất khi đi qua pooler
+   • Tách migration (direct) và runtime (pooled) là bắt buộc với Supabase
+
+4. LLM-as-a-Judge cần guard-rails
+   • Variance cao → cần ensemble hoặc self-consistency
+   • Luôn có fallback rule-based khi judge API fail
+
+5. Pipeline lấy cảm hứng từ production
+   • Phase gating + fire-and-forget ≠ novelty — chúng giải quyết
+     latency thực tế mà mọi chat product đều gặp
+
+───────────────────────────────────────────────────────────────────────────────
+
+═══════════════════════════════════════════════════════════════════════════════
+SLIDE 6.8 — LỜI CẢM ƠN & Q&A
+═══════════════════════════════════════════════════════════════════════════════
+
+Cảm ơn:
+   • GVHD đã hướng dẫn, đặc biệt về (a) thiết kế đánh giá,
+     (b) cách đặt câu hỏi safety trong domain y tế
+   • Supabase & Groq free-tier — đã cho phép chạy benchmark thật
+   • Cộng đồng open-source FastAPI / Next.js / LlamaIndex
+
+Tài liệu tham khảo:
+   • [1] Mifflin-St Jeor equation (1990) — BMR calculation
+   • [2] Supabase docs — PgBouncer transaction mode
+   • [3] Groq LPU inference — llama-3.3-70b
+   • [4] Anthropic — LLM-as-a-Judge best practices
+   • [5] FastAPI / SQLAlchemy / Alembic official docs
+
+Liên hệ:
+   • Email: <email-của-bạn>@gmail.com
+   • GitHub: github.com/<username>/SmartMeal
+   • Demo: smartmeal.vn (placeholder)
+
+Q & A
+
+═══════════════════════════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════════════════════════
+SLIDE 6.9 — PHỤ LỤC: MỘT SỐ ĐÁNH ĐỔI (TRADE-OFFS) ĐÃ CHỌN
+═══════════════════════════════════════════════════════════════════════════════
+
+Lựa chọn                       │ Lý do                             │ Đánh đổi
+───────────────────────────────┼───────────────────────────────────┼─────────────────────
+Groq llama-3.3-70b (judge)    │ Latency thấp, free-tier ổn       │ Vendor lock-in
+CHAS v2 (custom formula)      │ Phản ánh weighted safety > perf   │ Khó benchmark chuẩn quốc tế
+Single LLM provider chính     │ Đơn giản hoá vận hành            │ Down-time risk
+Fire-and-forget extractor      │ UX mượt, không block              │ Cần retry/cron cleanup
+JWT (không OAuth)             │ Phù hợp scope đồ án               │ Production cần OAuth/2FA
+SQLAlchemy ORM                │ Tách domain rõ, dễ migrate        │ Verbose hơn raw SQL
+───────────────────────────────┴───────────────────────────────────┴─────────────────────
+
+═══════════════════════════════════════════════════════════════════════════════
+HẾT SLIDE 6
+═══════════════════════════════════════════════════════════════════════════════

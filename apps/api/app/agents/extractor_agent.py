@@ -62,6 +62,24 @@ IMPORTANT RULES:
 - Severity mapping: "hơi", "nhẹ", "một chút" → "mild"; "khá", "vừa" → "moderate"; "rất", "nặng", "nghiêm trọng" → "severe"
 - For fitness: include workout_type, duration_min, soreness_areas, injuries
 - Foods that caused bad reactions (tiêu chảy, dị ứng, buồn nôn) → include in facts as "food_to_avoid" with reason
+
+WEIGHT ESTIMATION (use these defaults when the user did not give an explicit gram amount):
+- 1 quả trứng gà = 50g (vịt = 70g)
+- 1 bát cơm = 150g (bát ăn cơm nhỏ); 1 đĩa cơm = 200g
+- 1 bát phở/bún = 350g (kèm nước dùng + topping)
+- 1 tô/chén canh = 250g
+- 1 ổ bánh mì = 60g; 1 lát bánh mì sandwich = 35g
+- 1 miếng thịt heo/bò gà (1 lạng ước chừng) = 100g
+- 1 đĩa rau xào/trộn = 150g; 1 bát salad = 120g
+- 1 con cá nhỏ (cá rô, cá diếc) = 100g; 1 khúc cá lớn = 150g
+- 1 quả chuối = 120g; 1 quả táo/cam = 180g
+- 1 ly nước (250ml) = 250g
+- 1 phần/tô/đĩa (cơm bụi, cơm văn phòng) = 300g
+
+Compute the resulting gram amount yourself and emit it as a single integer.
+Example: "5 quả trứng" → 250 (not "5 * 50"). The schema only accepts literal
+numbers — never arithmetic expressions. Without this field the popup and
+saved MealLog become non-deterministic.
 """
 
 EXTRACTION_SCHEMA = """
@@ -74,7 +92,8 @@ EXTRACTION_SCHEMA = """
         {
           "food_name": "food name",
           "quantity": 1,
-          "unit": "phần|tô|đĩa|con|gói|cup|ly",
+          "unit": "phần|tô|đĩa|con|gói|cup|ly|quả|trứng|bát|chén|đĩa|miếng|lát",
+          "estimated_weight_g": 0,
           "calories": 0,
           "protein_g": 0,
           "carb_g": 0,
@@ -204,11 +223,13 @@ Rules:
             proposals = []
             if extracted and context.full_context:
                 try:
-                    proposals = build_proposals_from_extraction(
+                    proposals = await build_proposals_from_extraction(
                         extraction=extracted,
                         user_message=user_message,
                         session_id=context.session_id,
                         current_context=context.full_context,
+                        db=db,
+                        user_id=context.user.id,
                     )
                 except Exception as e:
                     logger.warning("ProposalBuilder failed: %s", e)
@@ -237,10 +258,6 @@ Rules:
                         await engine.commit_with_session(db)
                 await self._mark_session_extracted(context.session_id, db)
 
-                # Write ConversationInsight records from the SAME extracted data.
-                # This replaces the removed _bg_extract_insights background task.
-                # ConversationInsight is the SQL table for structured facts that the chatbot context
-                # builder loads for personalization. key_facts in UserMemory is the JSONB mirror.
                 if extracted.get("facts"):
                     try:
                         insights = self._build_conversation_insights(extracted, today)
